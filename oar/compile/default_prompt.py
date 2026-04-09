@@ -1,0 +1,32 @@
+"""Default compile prompt template."""
+
+COMPILE_PROMPT = """\
+You are compiling a raw document into a structured wiki article for a personal \
+knowledge base called OAR (Obsidian Agentic RAG).
+
+## Input Document
+
+Title: {{ title }}
+
+Content:
+{{ content }}
+
+## Instructions
+
+Create a comprehensive wiki article that:
+1. Starts with a **TL;DR** (1-2 sentences in a blockquote)
+2. Has an **Overview** section (2-3 paragraphs)
+3. Lists **Key Ideas** as bullet points
+4. Explains **How It Works** with clear steps or components
+5. Links to related concepts using [[wikilinks]] format
+6. Includes a **References** section linking back to sources
+
+## Output Format
+
+Respond with ONLY a JSON object (no markdown fences) with these keys:
+- "frontmatter": object with keys: type (concept|entity|method|comparison|\
+tutorial|timeline), domain (array of strings), tags (array of strings), \
+related (array of wikilink IDs like "attention-mechanism"), complexity \
+(beginner|intermediate|advanced), confidence (0.0-1.0)
+- "body": the full markdown article body (without frontmatter)
+"""
