@@ -41,13 +41,15 @@ oar index --rebuild
 oar validate attention-mechanisms
 ```
 
-**Batch import:** Feed it raw documents and let OAR compile them.
+**Batch import:** Feed it raw documents and build everything in one command.
 
 ```bash
 oar ingest --file article.md
 oar ingest --url https://example.com/article
-oar compile --all    # Uses claude/opencode/codex CLI tools
+oar build             # Compile + index + lint in one step
 ```
+
+Or just drop files into `01-raw/` and run `oar build` — it detects new content automatically.
 
 ### Explore
 
@@ -92,6 +94,7 @@ Each wiki article has YAML frontmatter with metadata and `[[wikilinks]]` for cro
 | Command | Description |
 |---------|-------------|
 | `oar init` | Create a new vault |
+| `oar build` | **One-command pipeline: compile → index → lint** |
 | `oar add-note` | Add a structured wiki note (no LLM) |
 | `oar ingest` | Import files, URLs, directories |
 | `oar compile` | Compile raw articles into wiki notes (LLM) |

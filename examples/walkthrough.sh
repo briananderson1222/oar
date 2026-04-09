@@ -29,7 +29,7 @@ echo ""
 # 1. Vault Status — Show an overview of the vault
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [1/12] oar status — Show vault overview"
+echo "  [1/13] oar status — Show vault overview"
 echo "======================================================================"
 echo ""
 echo "  Displays article counts, directory structure health, and overall"
@@ -42,7 +42,7 @@ echo ""
 # 2. Provider Status — Check which LLM providers are available
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [2/12] oar status --providers — Show LLM provider status"
+echo "  [2/13] oar status --providers — Show LLM provider status"
 echo "======================================================================"
 echo ""
 echo "  Checks which LLM backends (claude, opencode, codex, API) are"
@@ -56,7 +56,7 @@ echo ""
 # 3. Full-Text Search — Find articles mentioning "attention"
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [3/12] oar search \"attention\" — Full-text search"
+echo "  [3/13] oar search \"attention\" — Full-text search"
 echo "======================================================================"
 echo ""
 echo "  Searches across all compiled articles for the term 'attention'."
@@ -69,7 +69,7 @@ echo ""
 # 4. Phrase Search — Find articles about "fine-tuning"
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [4/12] oar search \"fine-tuning\" — Phrase matching search"
+echo "  [4/13] oar search \"fine-tuning\" — Phrase matching search"
 echo "======================================================================"
 echo ""
 echo "  Demonstrates phrase matching — searches for the exact phrase"
@@ -82,7 +82,7 @@ echo ""
 # 5. Quick Lint — Fast sanity check on vault structure
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [5/12] oar lint --quick — Quick lint check"
+echo "  [5/13] oar lint --quick — Quick lint check"
 echo "======================================================================"
 echo ""
 echo "  Runs a fast lint pass: checks frontmatter fields, file naming,"
@@ -95,7 +95,7 @@ echo ""
 # 6. Coverage Analysis — Deep lint with coverage report
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [6/12] oar lint --coverage — Coverage analysis"
+echo "  [6/13] oar lint --coverage — Coverage analysis"
 echo "======================================================================"
 echo ""
 echo "  Runs a full lint pass including coverage analysis. Reports which"
@@ -108,7 +108,7 @@ echo ""
 # 7. Validate Single Article — Check one article in detail
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [7/12] oar validate — Validate a single article"
+echo "  [7/13] oar validate — Validate a single article"
 echo "======================================================================"
 echo ""
 echo "  Validates the 'transformer-architecture' article in detail,"
@@ -122,7 +122,7 @@ echo ""
 # 8. Add a Note — Create a new note in the vault
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [8/12] oar add-note — Add a new note to the vault"
+echo "  [8/13] oar add-note — Add a new note to the vault"
 echo "======================================================================"
 echo ""
 echo "  Creates a new note with a title, body content, and tags."
@@ -135,23 +135,52 @@ oar add-note "$VAULT" \
 echo ""
 
 # ---------------------------------------------------------------------------
-# 9. Build Indices — Regenerate all index files
+# 9. Build — The one-command pipeline (compile → index → lint)
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [9/12] oar index — Build indices"
+echo "  [9/13] oar build --dry-run — Preview what would be compiled"
+echo "======================================================================"
+echo ""
+echo "  The 'oar build' command is the main workflow: drop content into"
+echo "  01-raw/ and run 'oar build' to compile, index, and lint in one step."
+echo "  --dry-run shows what would happen without actually doing it."
+echo ""
+oar build "$VAULT" --dry-run
+echo ""
+
+echo "======================================================================"
+echo "  [10/13] oar build — Run the full pipeline"
+echo "======================================================================"
+echo ""
+echo "  Runs compile (if new raw content exists), then index, then lint."
+echo "  Skips compile if no LLM provider is available."
+echo ""
+if oar build "$VAULT" 2>/dev/null; then
+  echo "  Build succeeded."
+else
+  echo "  [PARTIAL] Build completed with warnings."
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# 11. Build Indices — Regenerate all index files separately
+# ---------------------------------------------------------------------------
+echo "======================================================================"
+echo "  [11/13] oar index — Build indices (standalone)"
 echo "======================================================================"
 echo ""
 echo "  Rebuilds all index files: master index, maps of content (MOCs),"
 echo "  tag pages, orphan lists, stub detection, and recent articles."
+echo "  Normally run automatically by 'oar build', but available standalone."
 echo ""
 oar index "$VAULT"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 10. Export to HTML — Generate a browsable HTML export
+# 12. Export to HTML — Generate a browsable HTML export
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [10/12] oar export — Export vault to HTML"
+echo "  [12/13] oar export — Export vault to HTML"
 echo "======================================================================"
 echo ""
 echo "  Exports the vault as static HTML files suitable for browsing or"
@@ -161,31 +190,10 @@ oar export "$VAULT" --format html --output /tmp/oar-walkthrough-export
 echo ""
 
 # ---------------------------------------------------------------------------
-# 11. Compile — Use an LLM to compile/update articles
+# 13. Query — Ask a natural language question against the vault
 # ---------------------------------------------------------------------------
 echo "======================================================================"
-echo "  [11/12] oar compile — Compile articles with LLM"
-echo "======================================================================"
-echo ""
-echo "  Uses an LLM provider to compile raw sources into structured"
-echo "  knowledge notes. Requires an LLM provider to be configured."
-echo "  Skipping if no provider is available..."
-echo ""
-
-if oar compile "$VAULT" 2>/dev/null; then
-  echo "  Compile succeeded."
-else
-  echo "  [SKIPPED] No LLM provider available or compile not configured."
-  echo "  To enable: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure"
-  echo "  a provider in .oar/config.yaml"
-fi
-echo ""
-
-# ---------------------------------------------------------------------------
-# 12. Query — Ask a natural language question against the vault
-# ---------------------------------------------------------------------------
-echo "======================================================================"
-echo "  [12/12] oar query — Natural language query"
+echo "  [13/13] oar query — Natural language query"
 echo "======================================================================"
 echo ""
 echo "  Asks a question against the vault's knowledge base. The LLM uses"
@@ -209,8 +217,13 @@ echo "======================================================================"
 echo "  Walkthrough Complete"
 echo "======================================================================"
 echo ""
-echo "  All 12 commands demonstrated. Commands 11 and 12 (compile/query)"
-echo "  require an LLM provider — they were skipped if none was available."
+echo "  All 13 commands demonstrated. The key workflow is:"
+echo ""
+echo "    1. Drop content into 01-raw/"
+echo "    2. Run 'oar build' to compile + index + lint"
+echo "    3. Open in Obsidian and explore"
+echo ""
+echo "  Query (command 13) requires an LLM provider."
 echo ""
 echo "  To explore the vault interactively, open it in Obsidian:"
 echo "    obsidian://open?vault=$VAULT"

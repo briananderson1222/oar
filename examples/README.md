@@ -97,10 +97,11 @@ chmod +x examples/walkthrough.sh
 | 6 | `oar lint --coverage` | Deep coverage analysis |
 | 7 | `oar validate --article` | Validate a single article |
 | 8 | `oar add-note` | Create a new note |
-| 9 | `oar index` | Rebuild all index files |
-| 10 | `oar export` | Export vault to HTML |
-| 11 | `oar compile` | Compile with LLM (needs provider) |
-| 12 | `oar query` | Natural language Q&A (needs provider) |
+| 9 | `oar build --dry-run` | Preview the full pipeline |
+| 10 | `oar build` | **Run compile → index → lint** |
+| 11 | `oar index` | Rebuild all index files (standalone) |
+| 12 | `oar export` | Export vault to HTML |
+| 13 | `oar query` | Natural language Q&A (needs provider) |
 
 ## Opening in Obsidian
 
@@ -113,7 +114,7 @@ chmod +x examples/walkthrough.sh
 
 The following commands require an LLM provider to function:
 
-- **`oar compile`** — Uses an LLM to compile raw sources into structured notes
+- **`oar build`** (compile step) — Uses an LLM to compile raw sources into structured notes
 - **`oar query`** — Uses an LLM to answer questions against the vault
 
 Configure a provider using one of these methods:
