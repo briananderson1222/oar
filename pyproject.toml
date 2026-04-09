@@ -26,6 +26,9 @@ dev = [
     "pytest>=7.0",
     "pytest-mock>=3.0",
 ]
+mcp = [
+    "mcp[cli]>=1.0",
+]
 
 [project.scripts]
 oar = "oar.cli.main:app"

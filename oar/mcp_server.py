@@ -17,12 +17,10 @@ def create_server():
             TextContent,
             Tool,
         )
-    except ImportError:
-        print(
-            "Error: mcp package not installed. Install with: pip install 'mcp[cli]'",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    except ImportError as exc:
+        raise ImportError(
+            "mcp package not installed. Install with: pip install 'oar[mcp]'"
+        ) from exc
 
     server = Server("oar-mcp")
 
