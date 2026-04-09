@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build pyinstaller
+
+      - name: Build wheel
+        run: python -m build
+
+      - name: Build standalone binary
+        run: |
+          pip install -e .
+          pyinstaller --onefile --name oar oar/__main__.py
+
+      - name: Rename binary with platform
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            mv dist/oar dist/oar-macos-arm64
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            mv dist/oar dist/oar-linux-amd64
+          fi
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oar-${{ matrix.os }}
+          path: |
+            dist/*.whl
+            dist/oar-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.whl
+            artifacts/**/oar-*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
