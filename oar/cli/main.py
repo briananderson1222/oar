@@ -14,6 +14,7 @@ from rich.table import Table
 
 from oar import __version__
 from oar.cli.add_note import add_note_cmd
+from oar.cli.build import build_cmd
 from oar.cli.compile import compile_cmd
 from oar.cli.index_cmd import index_cmd
 from oar.cli.ingest import ingest as ingest_command
@@ -54,6 +55,7 @@ app.command(name="lint")(lint_cmd)
 app.command(name="export")(export_cmd)
 app.command(name="add-note")(add_note_cmd)
 app.command(name="validate")(validate_cmd)
+app.command(name="build")(build_cmd)
 
 
 def _find_vault_path() -> Optional[Path]:
