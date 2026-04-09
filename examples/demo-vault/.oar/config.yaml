@@ -1,0 +1,9 @@
+# OAR configuration — edit freely
+llm:
+  default_model: "claude-sonnet-4-20250514"
+  fallback_model: "ollama/llama3.1"
+  max_cost_per_call: 0.50
+
+compile:
+  default_type: "concept"
+  auto_index: true
