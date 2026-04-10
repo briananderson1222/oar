@@ -211,11 +211,22 @@ def tool_get_wiki_context(
     }
 
 
-def tool_query_wiki(question: str) -> dict[str, Any]:
+def tool_query_wiki(
+    question: str,
+    provider: str | None = None,
+    model: str | None = None,
+    max_cost: float = 0.50,
+) -> dict[str, Any]:
     """Ask a question against the wiki knowledge base.
+
+    Retrieves context from the vault, then calls an LLM to answer.
+    Requires an LLM provider to be available.
 
     Args:
         question: Natural language question
+        provider: LLM provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli", "ollama", "litellm"). Uses config default if not specified.
+        model: Model name override (e.g. "claude-sonnet-4-20250514"). Uses config default if not specified.
+        max_cost: Maximum spend in USD for this query (default 0.50)
 
     Returns:
         Answer with sources consulted and citations
@@ -227,8 +238,25 @@ def tool_query_wiki(question: str) -> dict[str, Any]:
     from oar.query.tools import ToolExecutor
     from oar.search.indexer import SearchIndexer
     from oar.search.searcher import Searcher
+    from oar.cli._shared import build_router, VALID_PROVIDERS
 
-    vault, ops, router, cost_tracker, config = _build_components()
+    vault_path = _resolve_vault_path()
+    if vault_path is None:
+        raise ValueError("No OAR vault found.")
+
+    # Validate provider if specified.
+    if provider is not None and provider not in VALID_PROVIDERS:
+        raise ValueError(
+            f"Invalid provider: '{provider}'. "
+            f"Valid providers: {sorted(VALID_PROVIDERS)}"
+        )
+
+    vault, ops = _build_vault_only()
+
+    # Build router with optional provider/model override.
+    router, cost_tracker, config = build_router(
+        vault_path, model=model, provider=provider
+    )
 
     # Ensure search index.
     db_path = vault.oar_dir / "search-index" / "search.db"
@@ -619,13 +647,26 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "handler": tool_get_wiki_context,
     },
     "query_wiki": {
-        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude/opencode/codex CLI). Prefer get_wiki_context for agent-driven Q&A.",
+        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude-cli, codex-cli, opencode-cli, ollama, or litellm). Prefer get_wiki_context for agent-driven Q&A (no subprocess needed).",
         "parameters": {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
                     "description": "Natural language question",
+                },
+                "provider": {
+                    "type": "string",
+                    "description": "LLM provider to use. Must be one of: claude-cli, codex-cli, opencode-cli, ollama, litellm. Uses config default if not specified.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model name override (e.g. claude-sonnet-4-20250514). Uses config default if not specified.",
+                },
+                "max_cost": {
+                    "type": "number",
+                    "description": "Maximum spend in USD for this query",
+                    "default": 0.50,
                 },
             },
             "required": ["question"],

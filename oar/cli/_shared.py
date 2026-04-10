@@ -9,9 +9,12 @@ from typing import Optional
 from oar.core.config import OarConfig
 from oar.core.vault import Vault
 from oar.llm.cost_tracker import CostTracker
-from oar.llm.providers.registry import ProviderRegistry
+from oar.llm.providers.registry import PROVIDER_CLASSES, ProviderRegistry
 from oar.llm.providers.selector import DEFAULT_CHAIN, ProviderSelector
 from oar.llm.router import LLMRouter
+
+# Valid provider names that can be passed to build_router / query_wiki.
+VALID_PROVIDERS = frozenset(PROVIDER_CLASSES.keys())
 
 
 def find_vault_path() -> Optional[Path]:
@@ -30,12 +33,30 @@ def find_vault_path() -> Optional[Path]:
 
 
 def build_router(
-    vault_path: Path, model: str | None = None
+    vault_path: Path,
+    model: str | None = None,
+    provider: str | None = None,
 ) -> tuple[LLMRouter, CostTracker, OarConfig]:
     """Build an LLMRouter with CLI provider support.
 
     Returns (router, cost_tracker, config) so callers can also access config.
+
+    Args:
+        vault_path: Path to the OAR vault.
+        model: Model name override (e.g. "claude-sonnet-4-20250514").
+        provider: Provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli",
+                  "ollama", "litellm"). Must be a valid provider name. If not
+                  specified, uses config default or auto-detects.
+
+    Raises:
+        ValueError: If provider is not a valid provider name.
     """
+    if provider is not None and provider not in VALID_PROVIDERS:
+        raise ValueError(
+            f"Invalid provider: '{provider}'. "
+            f"Valid providers: {sorted(VALID_PROVIDERS)}"
+        )
+
     vault = Vault(vault_path)
     config = OarConfig.load(vault.oar_dir / "config.yaml")
     effective_model = model or config.llm.default_model
@@ -60,7 +81,6 @@ def build_router(
                 cost_tracker,
                 config,
             )
-        # No local providers available — still create router (will fail gracefully).
 
     # Build provider selector from config for CLI tool support.
     provider_selector = None
@@ -68,8 +88,11 @@ def build_router(
         timeout = config.llm.cli_timeout
         registry = ProviderRegistry(timeout=timeout)
 
-        # Determine fallback chain.
-        if config.llm.fallback_chain:
+        # Determine fallback chain — priority: explicit arg > config > auto-detect.
+        if provider:
+            # Explicit provider requested — use it exclusively.
+            fallback_chain = [provider]
+        elif config.llm.fallback_chain:
             # User-specified chain takes priority.
             fallback_chain = config.llm.fallback_chain
         elif config.llm.provider and config.llm.provider != "auto":

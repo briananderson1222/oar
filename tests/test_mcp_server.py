@@ -15,6 +15,7 @@ from oar.mcp_tools import (
     tool_list_articles,
     tool_list_mocs,
     tool_mark_raw_compiled,
+    tool_query_wiki,
     tool_read_article,
     tool_read_raw_article,
     tool_save_compiled_article,
@@ -546,6 +547,43 @@ class TestToolBuildIndices:
             if f.name.startswith("moc-") and f.name != "_index.md"
         ]
         assert len(moc_files) >= 1
+
+
+class TestBuildRouterProviderValidation:
+    """build_router validates provider names."""
+
+    def test_valid_provider_accepted(self):
+        """Valid provider names are accepted without error."""
+        from oar.cli._shared import VALID_PROVIDERS
+
+        # Just verify the set contains what we expect.
+        assert "claude-cli" in VALID_PROVIDERS
+        assert "codex-cli" in VALID_PROVIDERS
+        assert "opencode-cli" in VALID_PROVIDERS
+        assert "ollama" in VALID_PROVIDERS
+        assert "litellm" in VALID_PROVIDERS
+
+    def test_invalid_provider_raises(self, tmp_vault, monkeypatch):
+        """Invalid provider name raises ValueError with list of valid options."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        from oar.cli._shared import build_router
+
+        with pytest.raises(ValueError, match="Invalid provider.*gpt-4"):
+            build_router(tmp_vault, provider="gpt-4")
+
+    def test_query_wiki_invalid_provider_raises(self, tmp_vault, monkeypatch):
+        """query_wiki rejects invalid provider name."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        with pytest.raises(ValueError, match="Invalid provider.*fake-llm"):
+            tool_query_wiki(question="test", provider="fake-llm")
+
+    def test_query_wiki_schema_has_provider_param(self):
+        """query_wiki MCP schema includes provider and model params."""
+        schema = TOOL_DEFINITIONS["query_wiki"]["parameters"]
+        props = schema["properties"]
+        assert "provider" in props
+        assert "model" in props
+        assert "max_cost" in props
 
 
 class TestMCPServerCreation:
