@@ -131,13 +131,99 @@ oar config llm.offline true    # Persist offline preference
 
 ## MCP Server
 
-Expose your wiki as tools for Claude Desktop, Cursor, or any MCP client:
+Expose your wiki as tools for any MCP-compatible agent. The server provides read AND write tools — agents can compile articles, build indices, and manage the full lifecycle.
 
 ```bash
 oar mcp
 ```
 
-Available tools: `search_wiki`, `read_article`, `list_articles`, `query_wiki`, `get_status`, `list_mocs`.
+### Available Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_pending_articles` | Find raw articles needing compilation |
+| `read_raw_article` | Read a raw article's content |
+| `save_compiled_article` | Save a compiled wiki note (handles frontmatter, state, paths) |
+| `mark_raw_compiled` | Link raw → compiled in state |
+| `build_indices` | Rebuild MOCs, tags, orphans, stubs |
+| `search_wiki` | Full-text search |
+| `read_article` | Read a compiled article |
+| `list_articles` | List/filter compiled articles |
+| `query_wiki` | Ask questions against the wiki |
+| `get_status` | Vault statistics |
+| `list_mocs` | List Maps of Content |
+
+### Setup: Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `~/.config/Claude/claude_desktop_config.json` (Linux):
+
+```json
+{
+  "mcpServers": {
+    "oar": {
+      "command": "oar",
+      "args": ["mcp"],
+      "env": {
+        "OAR_VAULT": "/path/to/your/vault"
+      }
+    }
+  }
+}
+```
+
+### Setup: Codex CLI
+
+Add to `~/.codex/config.json` or your project's `.codex/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "oar": {
+      "command": "oar",
+      "args": ["mcp"],
+      "env": {
+        "OAR_VAULT": "/path/to/your/vault"
+      }
+    }
+  }
+}
+```
+
+### Setup: Cursor
+
+Add to `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "oar": {
+      "command": "oar",
+      "args": ["mcp"],
+      "env": {
+        "OAR_VAULT": "/path/to/your/vault"
+      }
+    }
+  }
+}
+```
+
+### Setup: OpenCode
+
+The skill file is already installed at `~/.opencode/skills/oar/SKILL.md`. OpenCode agents will automatically discover OAR commands. Optionally add the MCP server to `~/.config/opencode/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "oar": {
+      "command": "oar",
+      "args": ["mcp"],
+      "env": {
+        "OAR_VAULT": "/path/to/your/vault"
+      }
+    }
+  }
+}
+```
 
 ## Development
 
