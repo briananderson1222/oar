@@ -11,6 +11,7 @@ from rich.table import Table
 
 from oar.cli._shared import find_vault_path, build_router
 from oar.compile.compiler import Compiler
+from oar.core.hashing import content_hash
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -50,6 +51,25 @@ def build_cmd(
     vault = Vault(vault_path)
     ops = VaultOps(vault)
     state_mgr = StateManager(vault.oar_dir)
+
+    # --- Auto-discover unregistered raw articles -----------------------
+    state = state_mgr.load()
+    registered = set(state.get("articles", {}).keys())
+    newly_registered = 0
+
+    for raw_path in ops.list_raw_articles():
+        fm, _ = ops.read_article(raw_path)
+        article_id = fm.get("id", raw_path.stem)
+        if article_id not in registered:
+            h = content_hash(raw_path)
+            rel = str(raw_path.relative_to(vault_path))
+            state_mgr.register_article(article_id, rel, h)
+            newly_registered += 1
+
+    if newly_registered:
+        console.print(
+            f"[dim]Auto-registered {newly_registered} new article(s) from 01-raw/[/dim]"
+        )
 
     uncompiled = state_mgr.get_uncompiled()
 

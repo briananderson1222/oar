@@ -188,3 +188,128 @@ class TestBuildCLI:
         )
         # Should NOT show actual compilation results.
         assert "Compiled" not in result.output
+
+    def test_build_auto_discovers_dropped_file(self, tmp_vault, monkeypatch):
+        """Dropping a .md into 01-raw/ without register_article() still gets compiled."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Write a raw file WITHOUT calling state_mgr.register_article().
+        raw_path = tmp_vault / "01-raw" / "articles" / "dropped-article.md"
+        raw_path.write_text(
+            "---\n"
+            "id: dropped-article\n"
+            "title: Dropped Article\n"
+            "source_type: article\n"
+            "compiled: false\n"
+            "---\n\n"
+            "This was dropped directly into 01-raw.\n"
+        )
+
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = _mock_provider_response(_make_llm_json())
+
+        with (
+            patch("oar.cli._shared.ProviderSelector") as MockSelector,
+            patch("oar.cli._shared.ProviderRegistry") as MockRegistry,
+        ):
+            mock_selector = MagicMock()
+            mock_selector.select_with_fallback.return_value = [mock_provider]
+            MockSelector.return_value = mock_selector
+            MockRegistry.return_value = MagicMock()
+            result = runner.invoke(app, ["build"])
+
+        assert result.exit_code == 0
+        output_lower = result.output.lower()
+        # The file should have been auto-registered.
+        assert "auto-registered" in output_lower
+        # The file should have been compiled (compile step ran).
+        assert "compiled" in output_lower
+
+    def test_build_skips_already_compiled(self, tmp_vault, monkeypatch):
+        """Already-compiled articles are skipped; LLM provider is not called."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Register an article AND mark it as compiled.
+        state_mgr = StateManager(tmp_vault / ".oar")
+        state_mgr.register_article(
+            "already-done", "01-raw/articles/already-done.md", "sha256:abc"
+        )
+        state_mgr.mark_compiled("already-done", ["already-done"])
+
+        # Write the raw file so auto-discovery can see it.
+        raw_path = tmp_vault / "01-raw" / "articles" / "already-done.md"
+        raw_path.write_text(
+            "---\n"
+            "id: already-done\n"
+            "title: Already Done\n"
+            "source_type: article\n"
+            "compiled: true\n"
+            "---\n\n"
+            "Already compiled content.\n"
+        )
+
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = _mock_provider_response(_make_llm_json())
+
+        with (
+            patch("oar.cli._shared.ProviderSelector") as MockSelector,
+            patch("oar.cli._shared.ProviderRegistry") as MockRegistry,
+        ):
+            mock_selector = MagicMock()
+            mock_selector.select_with_fallback.return_value = [mock_provider]
+            MockSelector.return_value = mock_selector
+            MockRegistry.return_value = MagicMock()
+            result = runner.invoke(app, ["build"])
+
+        assert result.exit_code == 0
+        output_lower = result.output.lower()
+        # Should report nothing to compile.
+        assert "nothing to compile" in output_lower
+        # The compile step should NOT have been called.
+        mock_provider.complete.assert_not_called()
+        # Index and lint still run.
+        assert "lint" in output_lower or "passed" in output_lower
+
+    def test_build_idempotent(self, tmp_vault, monkeypatch):
+        """Running oar build twice: second run skips already-compiled articles."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Write a raw file without registration — will be auto-discovered.
+        raw_path = tmp_vault / "01-raw" / "articles" / "idempotent-test.md"
+        raw_path.write_text(
+            "---\n"
+            "id: idempotent-test\n"
+            "title: Idempotent Test\n"
+            "source_type: article\n"
+            "compiled: false\n"
+            "---\n\n"
+            "Content for idempotent test.\n"
+        )
+
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = _mock_provider_response(_make_llm_json())
+
+        with (
+            patch("oar.cli._shared.ProviderSelector") as MockSelector,
+            patch("oar.cli._shared.ProviderRegistry") as MockRegistry,
+        ):
+            mock_selector = MagicMock()
+            mock_selector.select_with_fallback.return_value = [mock_provider]
+            MockSelector.return_value = mock_selector
+            MockRegistry.return_value = MagicMock()
+
+            # First build — should compile the article.
+            result1 = runner.invoke(app, ["build"])
+            assert result1.exit_code == 0
+            assert "compiled" in result1.output.lower()
+
+            # Reset mock call tracker for the second run.
+            mock_provider.complete.reset_mock()
+
+            # Second build — should find nothing to compile.
+            result2 = runner.invoke(app, ["build"])
+            assert result2.exit_code == 0
+            output2_lower = result2.output.lower()
+            assert "nothing to compile" in output2_lower
+            # The LLM provider should NOT have been called a second time.
+            mock_provider.complete.assert_not_called()
