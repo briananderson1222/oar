@@ -11,6 +11,7 @@ from oar.mcp_tools import (
     tool_build_indices,
     tool_get_pending_articles,
     tool_get_status,
+    tool_get_wiki_context,
     tool_list_articles,
     tool_list_mocs,
     tool_mark_raw_compiled,
@@ -77,7 +78,7 @@ class TestMCPToolDefinitions:
             assert "properties" in schema, f"{name} missing properties"
 
     def test_expected_tools_registered(self):
-        """All 11 expected tools are registered."""
+        """All 12 expected tools are registered."""
         expected = {
             "search_wiki",
             "read_article",
@@ -90,6 +91,7 @@ class TestMCPToolDefinitions:
             "save_compiled_article",
             "mark_raw_compiled",
             "build_indices",
+            "get_wiki_context",
         }
         assert set(TOOL_DEFINITIONS.keys()) == expected
 
@@ -180,6 +182,42 @@ class TestToolSearchWiki:
 
         results = tool_search_wiki("attention")
         assert isinstance(results, list)
+
+
+class TestToolGetWikiContext:
+    """get_wiki_context tool tests — retrieval only, no LLM."""
+
+    def test_returns_context_for_matching_query(self, tmp_vault, monkeypatch):
+        """Returns relevant article content without calling any LLM."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        _setup_vault_with_articles(tmp_vault)
+        # Build indices so the context manager can find articles via MOCs.
+        tool_build_indices()
+
+        result = tool_get_wiki_context(question="attention mechanism")
+        assert "context" in result
+        assert "sources" in result
+        assert "tokens_estimated" in result
+        # Should have found the attention article.
+        assert any("attention" in s for s in result["sources"])
+
+    def test_returns_context_even_empty_vault(self, tmp_vault, monkeypatch):
+        """Returns empty context for vault with no compiled articles."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        result = tool_get_wiki_context(question="anything")
+        assert result["context"] == ""
+        assert result["sources"] == []
+        assert result["tokens_estimated"] == 0
+
+    def test_respects_token_budget(self, tmp_vault, monkeypatch):
+        """Low token budget means less context returned."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        _setup_vault_with_articles(tmp_vault)
+
+        big = tool_get_wiki_context(question="attention", max_tokens=100000)
+        small = tool_get_wiki_context(question="attention", max_tokens=50)
+        # Big budget should have more content than small.
+        assert big["tokens_estimated"] >= small["tokens_estimated"]
 
 
 class TestToolListMocs:

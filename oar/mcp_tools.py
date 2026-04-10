@@ -40,6 +40,22 @@ def _build_components():
     return vault, ops, router, cost_tracker, config
 
 
+def _build_vault_only():
+    """Build vault components without LLM router. For retrieval-only tools."""
+    from oar.core.vault import Vault
+    from oar.core.vault_ops import VaultOps
+
+    vault_path = _resolve_vault_path()
+    if vault_path is None:
+        raise ValueError(
+            "No OAR vault found. Set OAR_VAULT or run from a vault directory."
+        )
+
+    vault = Vault(vault_path)
+    ops = VaultOps(vault)
+    return vault, ops
+
+
 # ------------------------------------------------------------------
 # Tool implementations
 # ------------------------------------------------------------------
@@ -155,6 +171,44 @@ def tool_list_articles(
         )
 
     return articles
+
+
+def tool_get_wiki_context(
+    question: str,
+    max_tokens: int = 50000,
+) -> dict[str, Any]:
+    """Get relevant wiki context for a question. No LLM call — pure retrieval.
+
+    Use this when you (the agent) want to answer a question yourself.
+    Returns relevant article content so you can think and respond.
+    Does NOT call any LLM — it searches, scores, and assembles context
+    using keyword matching and the vault's index structure.
+
+    Args:
+        question: The question or topic to find context for
+        max_tokens: Approximate token budget for returned context
+
+    Returns:
+        Dict with context text, sources list, and token estimate
+    """
+    from oar.core.link_resolver import LinkResolver
+    from oar.query.context_manager import ContextManager
+
+    vault, ops = _build_vault_only()
+
+    link_resolver = LinkResolver(vault, ops)
+    context_manager = ContextManager(vault, ops, link_resolver)
+
+    ctx = context_manager.build_context(question, max_tokens=max_tokens)
+
+    sources = [s["source"] for s in ctx.sections]
+
+    return {
+        "context": ctx.render(),
+        "sources": sources,
+        "tokens_estimated": ctx.total_tokens,
+        "utilization": round(ctx.utilization, 2),
+    }
 
 
 def tool_query_wiki(question: str) -> dict[str, Any]:
@@ -545,8 +599,27 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         },
         "handler": tool_list_articles,
     },
+    "get_wiki_context": {
+        "description": "Get relevant wiki context for a question — pure retrieval, no LLM call. Use this to gather context and answer questions yourself.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question or topic to find context for",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Approximate token budget for context (default 50000)",
+                    "default": 50000,
+                },
+            },
+            "required": ["question"],
+        },
+        "handler": tool_get_wiki_context,
+    },
     "query_wiki": {
-        "description": "Ask a question against the wiki knowledge base",
+        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude/opencode/codex CLI). Prefer get_wiki_context for agent-driven Q&A.",
         "parameters": {
             "type": "object",
             "properties": {
