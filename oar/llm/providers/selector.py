@@ -15,6 +15,7 @@ DEFAULT_CHAIN: list[str] = [
     "claude-cli",
     "opencode-cli",
     "codex-cli",
+    "kiro-cli",
     "ollama",
     "litellm",
 ]

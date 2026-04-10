@@ -14,6 +14,7 @@ PROVIDER_CLASSES: dict[str, tuple[str, str]] = {
     "claude-cli": ("oar.llm.providers.claude_cli", "ClaudeCliProvider"),
     "opencode-cli": ("oar.llm.providers.opencode_cli", "OpenCodeCliProvider"),
     "codex-cli": ("oar.llm.providers.codex_cli", "CodexCliProvider"),
+    "kiro-cli": ("oar.llm.providers.kiro_cli", "KiroCliProvider"),
     "ollama": ("oar.llm.providers.ollama_provider", "OllamaProvider"),
     "litellm": ("oar.llm.providers.litellm_provider", "LitellmProvider"),
 }

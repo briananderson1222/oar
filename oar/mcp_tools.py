@@ -224,7 +224,7 @@ def tool_query_wiki(
 
     Args:
         question: Natural language question
-        provider: LLM provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli", "ollama", "litellm"). Uses config default if not specified.
+        provider: LLM provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli", "kiro-cli", "ollama", "litellm"). Uses config default if not specified.
         model: Model name override (e.g. "claude-sonnet-4-20250514"). Uses config default if not specified.
         max_cost: Maximum spend in USD for this query (default 0.50)
 
@@ -647,7 +647,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "handler": tool_get_wiki_context,
     },
     "query_wiki": {
-        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude-cli, codex-cli, opencode-cli, ollama, or litellm). Prefer get_wiki_context for agent-driven Q&A (no subprocess needed).",
+        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, or litellm). Prefer get_wiki_context for agent-driven Q&A (no subprocess needed).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -657,7 +657,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "LLM provider to use. Must be one of: claude-cli, codex-cli, opencode-cli, ollama, litellm. Uses config default if not specified.",
+                    "description": "LLM provider to use. Must be one of: claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, litellm. Uses config default if not specified.",
                 },
                 "model": {
                     "type": "string",
