@@ -264,6 +264,28 @@ class TestToolGetPendingArticles:
         result = tool_get_pending_articles()
         assert result == []
 
+    def test_updated_raw_article(self, tmp_vault, monkeypatch):
+        """Article with changed hash shows as UPDATED."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        from oar.core.state import StateManager
+
+        state_mgr = StateManager(tmp_vault / ".oar")
+        # Register with old hash.
+        state_mgr.register_article(
+            "updated-test", "01-raw/articles/updated-test.md", "sha256:oldhash"
+        )
+        state_mgr.mark_compiled("updated-test", ["updated-test"])
+        # Write new content (different hash).
+        raw_path = tmp_vault / "01-raw" / "articles" / "updated-test.md"
+        raw_path.write_text(
+            "---\nid: updated-test\ntitle: Updated Test\n---\nNew content.\n"
+        )
+
+        pending = tool_get_pending_articles()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "UPDATED"
+        assert pending[0]["article_id"] == "updated-test"
+
 
 class TestToolReadRawArticle:
     """read_raw_article tool tests."""
@@ -376,6 +398,39 @@ class TestToolSaveCompiledArticle:
         assert "ml" in meta["tags"]
         assert "ai" in meta["tags"]
 
+    def test_save_derives_domain_from_tags(self, tmp_vault, monkeypatch):
+        """Domain is derived from first 2 tags when not explicitly provided."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        from oar.core.frontmatter import FrontmatterManager
+
+        result = tool_save_compiled_article(
+            title="Domain Test",
+            body="Testing domain derivation.",
+            tags=["machine-learning", "nlp", "transformers"],
+        )
+        assert result["article_id"] == "domain-test"
+        # Read back and verify domain was set.
+        fm = FrontmatterManager()
+        path = tmp_vault / "02-compiled" / "concepts" / "domain-test.md"
+        meta, _ = fm.read(path)
+        assert meta["domain"] == ["machine-learning", "nlp"]
+
+    def test_save_uses_explicit_domain(self, tmp_vault, monkeypatch):
+        """Explicit domain overrides tag derivation."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        from oar.core.frontmatter import FrontmatterManager
+
+        tool_save_compiled_article(
+            title="Explicit Domain Test",
+            body="Testing explicit domain.",
+            tags=["tag1", "tag2"],
+            domain=["custom-domain", "another"],
+        )
+        fm = FrontmatterManager()
+        path = tmp_vault / "02-compiled" / "concepts" / "explicit-domain-test.md"
+        meta, _ = fm.read(path)
+        assert meta["domain"] == ["custom-domain", "another"]
+
 
 class TestToolMarkRawCompiled:
     """mark_raw_compiled tool tests."""
@@ -432,6 +487,27 @@ class TestToolBuildIndices:
         tags_dir = tmp_vault / "03-indices" / "tags"
         tag_files = list(tags_dir.glob("tag-*.md"))
         assert len(tag_files) >= 1
+
+    def test_build_indices_creates_mocs(self, tmp_vault, monkeypatch):
+        """build_indices generates MOCs when articles have domains."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        # Save an article with domain.
+        tool_save_compiled_article(
+            title="MOC Test Article",
+            body="Testing MOC generation.",
+            tags=["test"],
+            domain=["test-domain"],
+        )
+        result = tool_build_indices()
+        assert result["mocs"] >= 1
+        # Verify MOC file exists.
+        moc_dir = tmp_vault / "03-indices" / "moc"
+        moc_files = [
+            f
+            for f in moc_dir.iterdir()
+            if f.name.startswith("moc-") and f.name != "_index.md"
+        ]
+        assert len(moc_files) >= 1
 
 
 class TestMCPServerCreation:

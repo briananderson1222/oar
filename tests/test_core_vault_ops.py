@@ -1,6 +1,5 @@
 """Tests for oar.core.vault_ops — VaultOps."""
 
-from pathlib import Path
 
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -137,6 +136,25 @@ class TestGetArticleById:
             "Body.",
         )
         assert ops.get_article_by_id("nonexistent") is None
+
+    def test_get_article_by_id_slug_fallback(self, tmp_vault):
+        """Match by slugified title when no id field exists."""
+        ops = VaultOps(Vault(tmp_vault))
+        # Write article with title but no id.
+        path = tmp_vault / "02-compiled" / "concepts" / "some-article.md"
+        path.write_text("---\ntitle: Some Article\n---\nBody.\n")
+        # Should find it by slugified title.
+        result = ops.get_article_by_id("some-article")
+        assert result is not None
+        assert result == path
+
+    def test_get_article_by_id_slug_with_special_chars(self, tmp_vault):
+        """Match files with spaces/parens in name via slugified title."""
+        ops = VaultOps(Vault(tmp_vault))
+        path = tmp_vault / "02-compiled" / "concepts" / "acp.md"
+        path.write_text("---\ntitle: Agent Client Protocol (ACP) - CLI\n---\nBody.\n")
+        result = ops.get_article_by_id("agent-client-protocol-acp-cli")
+        assert result is not None
 
 
 class TestComputeHelpers:

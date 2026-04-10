@@ -225,6 +225,42 @@ class TestBuildCLI:
         # The file should have been compiled (compile step ran).
         assert "compiled" in output_lower
 
+    def test_build_auto_discovers_special_chars_filename(self, tmp_vault, monkeypatch):
+        """Files with spaces/parens in name get slugified IDs."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        # Drop a file with special chars — no id field.
+        raw_path = tmp_vault / "01-raw" / "articles" / "Agent Client Protocol (ACP).md"
+        raw_path.write_text(
+            "---\n"
+            "title: Agent Client Protocol (ACP)\n"
+            "source_type: article\n"
+            "compiled: false\n"
+            "---\n\n"
+            "Content about ACP.\n"
+        )
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = _mock_provider_response(_make_llm_json())
+        mock_selector = MagicMock()
+        mock_selector.select_with_fallback.return_value = [mock_provider]
+        with (
+            patch("oar.cli._shared.ProviderSelector") as MockSelector,
+            patch("oar.cli._shared.ProviderRegistry") as MockRegistry,
+        ):
+            MockSelector.return_value = mock_selector
+            MockRegistry.return_value = MagicMock()
+            result = runner.invoke(app, ["build"])
+        assert result.exit_code == 0
+        assert (
+            "auto-registered" in result.output.lower()
+            or "compiled" in result.output.lower()
+        )
+        # Verify it was registered with a slugified ID.
+        from oar.core.state import StateManager
+
+        state_mgr = StateManager(tmp_vault / ".oar")
+        state = state_mgr.load()
+        assert "agent-client-protocol-acp" in state["articles"]
+
     def test_build_skips_already_compiled(self, tmp_vault, monkeypatch):
         """Already-compiled articles are skipped; LLM provider is not called."""
         monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
