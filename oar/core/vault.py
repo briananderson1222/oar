@@ -67,7 +67,7 @@ INDEX_DIRS: list[str] = [
 ]
 
 EMPTY_STATE: dict = {
-    "version": "0.1.0",
+    "version": "0.2.0",
     "vault_path": "",
     "last_compile": None,
     "last_lint": None,

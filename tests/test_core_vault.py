@@ -23,7 +23,7 @@ class TestVaultInit:
         state_file = vault.path / ".oar" / "state.json"
         assert state_file.is_file()
         data = json.loads(state_file.read_text())
-        assert data["version"] == "0.1.0"
+        assert data["version"] == "0.2.0"
         assert "stats" in data
         assert "articles" in data
 
