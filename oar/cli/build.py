@@ -12,6 +12,7 @@ from rich.table import Table
 from oar.cli._shared import find_vault_path, build_router
 from oar.compile.compiler import Compiler
 from oar.core.hashing import content_hash
+from oar.core.slug import slugify
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -59,7 +60,8 @@ def build_cmd(
 
     for raw_path in ops.list_raw_articles():
         fm, _ = ops.read_article(raw_path)
-        article_id = fm.get("id", raw_path.stem)
+        # Prefer frontmatter id, then slugify the title, then slugify the stem.
+        article_id = fm.get("id") or slugify(fm.get("title", raw_path.stem))
         if article_id not in registered:
             h = content_hash(raw_path)
             rel = str(raw_path.relative_to(vault_path))

@@ -11,13 +11,12 @@ from jinja2 import Template
 
 import re
 
-from jinja2 import Template
-
 from oar.compile.concept_extractor import ConceptExtractor, ConceptSuggestion
 from oar.compile.context_builder import CompileContextBuilder
 from oar.compile.default_prompt import COMPILE_PROMPT
 from oar.compile.multi_prompt import MULTI_COMPILE_PROMPT
 from oar.core.frontmatter import FrontmatterManager
+from oar.core.slug import slugify
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -154,10 +153,7 @@ class Compiler:
         subdir = type_to_subdir.get(article_type, "concepts")
 
         # Build compiled article ID (slug from title).
-        compiled_id = title.lower().replace(" ", "-")
-        # Remove non-alphanumeric chars except hyphens.
-        compiled_id = "".join(c for c in compiled_id if c.isalnum() or c == "-")
-        compiled_id = compiled_id.strip("-")
+        compiled_id = slugify(title)
 
         # Assemble compiled frontmatter.
         now = datetime.now(timezone.utc).isoformat()
@@ -328,9 +324,7 @@ class Compiler:
 
         # Build compiled article ID from first title (or combined).
         combined_title = raw_titles[0] if len(raw_titles) == 1 else raw_titles[0]
-        compiled_id = combined_title.lower().replace(" ", "-")
-        compiled_id = "".join(c for c in compiled_id if c.isalnum() or c == "-")
-        compiled_id = compiled_id.strip("-")
+        compiled_id = slugify(combined_title)
 
         # Assemble compiled frontmatter.
         now = datetime.now(timezone.utc).isoformat()

@@ -74,12 +74,20 @@ class VaultOps:
     def get_article_by_id(self, article_id: str) -> Path | None:
         """Search for an article with matching ``id`` in frontmatter.
 
-        Scans both raw and compiled directories.
+        Scans both raw and compiled directories. Also matches by slugified
+        title or filename stem when no ``id`` field exists.
         """
+        from oar.core.slug import slugify
+
         candidates = self.list_raw_articles() + self.list_compiled_articles()
         for path in candidates:
             meta, _ = self.fm.read(path)
+            # Exact id match.
             if meta.get("id") == article_id:
+                return path
+            # Fallback: slugify title or stem.
+            title_or_stem = meta.get("title", path.stem)
+            if slugify(title_or_stem) == article_id:
                 return path
         return None
 
