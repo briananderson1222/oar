@@ -1,8 +1,6 @@
 """Tests for OAR MCP server — tool definitions and handlers."""
 
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -10,10 +8,15 @@ from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
 from oar.mcp_tools import (
     TOOL_DEFINITIONS,
+    tool_build_indices,
+    tool_get_pending_articles,
     tool_get_status,
     tool_list_articles,
     tool_list_mocs,
+    tool_mark_raw_compiled,
     tool_read_article,
+    tool_read_raw_article,
+    tool_save_compiled_article,
     tool_search_wiki,
 )
 
@@ -74,7 +77,7 @@ class TestMCPToolDefinitions:
             assert "properties" in schema, f"{name} missing properties"
 
     def test_expected_tools_registered(self):
-        """All 6 expected tools are registered."""
+        """All 11 expected tools are registered."""
         expected = {
             "search_wiki",
             "read_article",
@@ -82,6 +85,11 @@ class TestMCPToolDefinitions:
             "get_status",
             "list_mocs",
             "list_articles",
+            "get_pending_articles",
+            "read_raw_article",
+            "save_compiled_article",
+            "mark_raw_compiled",
+            "build_indices",
         }
         assert set(TOOL_DEFINITIONS.keys()) == expected
 
@@ -184,6 +192,246 @@ class TestToolListMocs:
 
         result = tool_list_mocs()
         assert isinstance(result, list)
+
+
+class TestToolGetPendingArticles:
+    """get_pending_articles tool tests."""
+
+    def test_empty_vault_returns_empty(self, tmp_vault, monkeypatch):
+        """No raw articles means empty list."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        result = tool_get_pending_articles()
+        assert result == []
+
+    def test_new_raw_article(self, tmp_vault, monkeypatch):
+        """Raw article not in state is NEW."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Write a raw article without registering it in state.
+        ops = VaultOps(Vault(tmp_vault))
+        ops.write_raw_article(
+            "new-article.md",
+            {"title": "New Article"},
+            "This is a new article about something.",
+        )
+
+        result = tool_get_pending_articles()
+        assert len(result) == 1
+        assert result[0]["status"] == "NEW"
+        assert result[0]["title"] == "New Article"
+
+    def test_uncompiled_raw_article(self, tmp_vault, monkeypatch, sample_state):
+        """Raw article in state but not compiled is UNCOMPILED."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Write the raw article that sample_state references.
+        ops = VaultOps(Vault(tmp_vault))
+        ops.write_raw_article(
+            "2024-01-15-test-article.md",
+            {
+                "id": "2024-01-15-test-article",
+                "title": "Test Article About Transformers",
+            },
+            "This is a test article about transformer architectures.",
+        )
+
+        result = tool_get_pending_articles()
+        assert len(result) == 1
+        assert result[0]["status"] == "UNCOMPILED"
+
+    def test_compiled_unchanged_article_skipped(
+        self, tmp_vault, monkeypatch, sample_raw_article
+    ):
+        """Compiled article with same hash is skipped."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        # Register and mark as compiled in state.
+        from oar.core.hashing import content_hash
+        from oar.core.state import StateManager
+
+        vault = Vault(tmp_vault)
+        state_mgr = StateManager(vault.oar_dir)
+        state = state_mgr.load()
+        state["articles"]["2024-01-15-test-article"] = {
+            "path": "01-raw/articles/2024-01-15-test-article.md",
+            "content_hash": content_hash(sample_raw_article),
+            "compiled": True,
+            "compiled_into": ["transformer-architecture"],
+            "last_compiled": "2024-01-15T10:30:00Z",
+        }
+        state_mgr.save(state)
+
+        result = tool_get_pending_articles()
+        assert result == []
+
+
+class TestToolReadRawArticle:
+    """read_raw_article tool tests."""
+
+    def test_read_existing_raw_article(self, tmp_vault, monkeypatch):
+        """Reading an existing raw article returns metadata and body."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        ops = VaultOps(Vault(tmp_vault))
+        ops.write_raw_article(
+            "my-article.md",
+            {
+                "id": "my-article",
+                "title": "My Article",
+                "source_url": "https://example.com",
+            },
+            "Body content of the article.",
+        )
+
+        result = tool_read_raw_article("my-article")
+        assert result["article_id"] == "my-article"
+        assert result["title"] == "My Article"
+        assert "Body content" in result["body"]
+        assert "metadata" in result
+
+    def test_read_raw_article_by_slug(self, tmp_vault, monkeypatch):
+        """Reading by slugified title works."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        ops = VaultOps(Vault(tmp_vault))
+        ops.write_raw_article(
+            "article.md",
+            {"title": "Cool Article"},
+            "Content here.",
+        )
+
+        result = tool_read_raw_article("cool-article")
+        assert result["article_id"] == "cool-article"
+        assert "Content here" in result["body"]
+
+    def test_read_raw_article_not_found(self, tmp_vault, monkeypatch):
+        """Reading non-existent article returns error."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        result = tool_read_raw_article("nonexistent")
+        assert "error" in result
+
+
+class TestToolSaveCompiledArticle:
+    """save_compiled_article tool tests."""
+
+    def test_save_basic_article(self, tmp_vault, monkeypatch):
+        """Saving a basic article creates the file and returns metadata."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        result = tool_save_compiled_article(
+            title="Attention Mechanism",
+            body="Attention is a mechanism in neural networks.",
+            article_type="concept",
+            tags=["attention", "neural-network"],
+        )
+
+        assert result["article_id"] == "attention-mechanism"
+        assert result["title"] == "Attention Mechanism"
+        assert result["word_count"] > 0
+        assert "path" in result
+
+        # Verify file was written.
+        path = Path(result["path"])
+        assert path.exists()
+
+    def test_save_with_source_ids_marks_compiled(
+        self, tmp_vault, monkeypatch, sample_state
+    ):
+        """Providing source_ids marks raw articles as compiled in state."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        from oar.core.state import StateManager
+
+        result = tool_save_compiled_article(
+            title="Test Compiled",
+            body="Compiled content.",
+            source_ids=["2024-01-15-test-article"],
+        )
+
+        # Verify source was marked as compiled.
+        vault = Vault(tmp_vault)
+        state_mgr = StateManager(vault.oar_dir)
+        state = state_mgr.load()
+        raw_entry = state["articles"]["2024-01-15-test-article"]
+        assert raw_entry["compiled"] is True
+        assert result["article_id"] in raw_entry["compiled_into"]
+
+    def test_save_with_related_and_tags(self, tmp_vault, monkeypatch):
+        """Related IDs are wrapped in wikilinks, tags stored as-is."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        result = tool_save_compiled_article(
+            title="Related Test",
+            body="Body content.",
+            tags=["ml", "ai"],
+            related=["some-article", "another-article"],
+        )
+
+        # Verify frontmatter by reading the file.
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        meta, body = ops.read_article(Path(result["path"]))
+        assert "[[some-article]]" in meta["related"]
+        assert "[[another-article]]" in meta["related"]
+        assert "ml" in meta["tags"]
+        assert "ai" in meta["tags"]
+
+
+class TestToolMarkRawCompiled:
+    """mark_raw_compiled tool tests."""
+
+    def test_mark_existing_raw(self, tmp_vault, monkeypatch, sample_state):
+        """Marking an existing raw article updates state."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+
+        result = tool_mark_raw_compiled(
+            raw_article_id="2024-01-15-test-article",
+            compiled_article_id="my-compiled-note",
+        )
+
+        assert result["status"] == "ok"
+        assert result["raw_id"] == "2024-01-15-test-article"
+        assert result["compiled_id"] == "my-compiled-note"
+
+        # Verify state was updated.
+        from oar.core.state import StateManager
+
+        vault = Vault(tmp_vault)
+        state_mgr = StateManager(vault.oar_dir)
+        state = state_mgr.load()
+        entry = state["articles"]["2024-01-15-test-article"]
+        assert entry["compiled"] is True
+        assert "my-compiled-note" in entry["compiled_into"]
+
+
+class TestToolBuildIndices:
+    """build_indices tool tests."""
+
+    def test_build_indices_returns_counts(self, tmp_vault, monkeypatch):
+        """build_indices returns count of generated indices."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        _setup_vault_with_articles(tmp_vault)
+
+        result = tool_build_indices()
+        assert "mocs" in result
+        assert "tags" in result
+        assert "orphans" in result
+        assert "stubs" in result
+        assert isinstance(result["mocs"], int)
+        assert isinstance(result["tags"], int)
+
+    def test_build_indices_creates_tag_pages(self, tmp_vault, monkeypatch):
+        """build_indices creates tag pages for article tags."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        _setup_vault_with_articles(tmp_vault)
+
+        result = tool_build_indices()
+        assert result["tags"] >= 1
+
+        # Verify tag page files exist.
+        tags_dir = tmp_vault / "03-indices" / "tags"
+        tag_files = list(tags_dir.glob("tag-*.md"))
+        assert len(tag_files) >= 1
 
 
 class TestMCPServerCreation:

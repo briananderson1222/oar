@@ -164,7 +164,7 @@ class MocBuilder:
 
         created: list[Path] = []
         for domain, articles in sorted(domain_articles.items()):
-            if len(articles) < 2:
+            if len(articles) < 1:
                 continue
             title = domain.replace("-", " ").replace("_", " ").title()
             path = self.build_moc(title, domain, articles)

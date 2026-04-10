@@ -143,7 +143,7 @@ class TestAutoGenerateMocs:
     def test_auto_generate_mocs_skips_small_domains(self, tmp_vault):
         vault = Vault(tmp_vault)
         ops = VaultOps(vault)
-        # Only one article in a domain — should be skipped.
+        # Single article in a domain — MOC is still generated (threshold is 1).
         ops.write_compiled_article(
             "concepts",
             "lonely.md",
@@ -158,7 +158,7 @@ class TestAutoGenerateMocs:
         )
         builder = MocBuilder(vault, ops)
         mocs = builder.auto_generate_mocs()
-        assert len(mocs) == 0
+        assert len(mocs) == 1  # Even 1 article gets a MOC
 
 
 class TestListMocs:

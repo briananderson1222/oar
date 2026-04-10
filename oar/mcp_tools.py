@@ -237,6 +237,264 @@ def tool_list_mocs() -> list[dict[str, Any]]:
     return moc_builder.list_mocs()
 
 
+def tool_get_pending_articles() -> list[dict[str, Any]]:
+    """Get raw articles that need compiling.
+
+    Returns list of pending articles with id, title, path, and status
+    (NEW, UNCOMPILED, or UPDATED).
+    """
+    from oar.core.hashing import has_content_changed
+    from oar.core.slug import slugify
+    from oar.core.state import StateManager
+
+    vault, ops, *_ = _build_components()
+    state_mgr = StateManager(vault.oar_dir)
+    state = state_mgr.load()
+    articles_state = state.get("articles", {})
+
+    pending: list[dict[str, Any]] = []
+    for path in ops.list_raw_articles():
+        meta, body = ops.read_article(path)
+        title = meta.get("title", path.stem)
+
+        # Determine article ID: prefer id field, then slugify(title), then slugify(stem).
+        article_id = meta.get("id") or slugify(title) or slugify(path.stem)
+
+        word_count = len(body.split())
+        entry = articles_state.get(article_id)
+
+        if entry is None:
+            # Not tracked in state at all.
+            status = "NEW"
+        elif not entry.get("compiled", False):
+            # Tracked but never compiled.
+            status = "UNCOMPILED"
+        elif has_content_changed(path, entry.get("content_hash", "")):
+            # Was compiled but content has changed since.
+            status = "UPDATED"
+        else:
+            # Already compiled and unchanged — skip.
+            continue
+
+        pending.append(
+            {
+                "article_id": article_id,
+                "title": title,
+                "path": str(path),
+                "status": status,
+                "word_count": word_count,
+            }
+        )
+
+    return pending
+
+
+def tool_read_raw_article(article_id: str) -> dict[str, Any]:
+    """Read a raw (uncompiled) article by ID.
+
+    Returns the article's metadata and full body content.
+    """
+    vault, ops, *_ = _build_components()
+    path = ops.get_article_by_id(article_id)
+    if not path:
+        return {"error": f"Raw article not found: {article_id}"}
+
+    meta, body = ops.read_article(path)
+    return {
+        "article_id": article_id,
+        "title": meta.get("title", ""),
+        "metadata": meta,
+        "body": body,
+        "path": str(path),
+    }
+
+
+def tool_save_compiled_article(
+    title: str,
+    body: str,
+    article_type: str = "concept",
+    tags: list[str] | None = None,
+    domain: list[str] | None = None,
+    related: list[str] | None = None,
+    source_ids: list[str] | None = None,
+    status: str = "draft",
+    confidence: float = 0.9,
+) -> dict[str, Any]:
+    """Save a compiled wiki article. Handles frontmatter, file placement, and state.
+
+    The agent provides the title and body content. This tool handles:
+    - Generating the article ID (slug from title)
+    - Creating proper YAML frontmatter
+    - Writing to the correct subdirectory (02-compiled/{type}s/)
+    - Updating state.json
+    - Computing word count and read time
+
+    Args:
+        title: Article title
+        body: Full article body in markdown (with [[wikilinks]])
+        article_type: concept, method, comparison, entity, tutorial, timeline
+        tags: List of tags
+        domain: Domain categories (e.g. ["machine-learning", "nlp"]). Derived from tags if not provided.
+        related: List of related article IDs (will be wrapped in [[ ]])
+        source_ids: Raw article IDs this was compiled from (marks them as compiled)
+        status: stub, draft, mature, review
+        confidence: 0.0-1.0 confidence score
+    """
+    from datetime import datetime, timezone
+
+    from oar.core.hashing import content_hash_string
+    from oar.core.slug import slugify
+    from oar.core.state import StateManager
+
+    vault, ops, *_ = _build_components()
+
+    # Generate ID and filename.
+    article_id = slugify(title)
+    filename = f"{article_id}.md"
+
+    # Wrap related IDs in wikilinks.
+    related_links: list[str] = []
+    if related:
+        for r in related:
+            if not r.startswith("[["):
+                related_links.append(f"[[{r}]]")
+            else:
+                related_links.append(r)
+
+    # Wrap source IDs in wikilinks.
+    source_links: list[str] = []
+    if source_ids:
+        for s in source_ids:
+            if not s.startswith("[["):
+                source_links.append(f"[[{s}]]")
+            else:
+                source_links.append(s)
+
+    # Compute word count and read time.
+    word_count = len(body.split())
+    read_time = max(1, word_count // 200)
+
+    # Derive domain from tags if not provided.
+    effective_tags = tags or []
+    effective_domain = (
+        domain if domain else (effective_tags[:2] if effective_tags else [])
+    )
+
+    # Build frontmatter (same pattern as add_note.py).
+    now = datetime.now(timezone.utc).isoformat()
+    metadata = {
+        "id": article_id,
+        "title": title,
+        "aliases": [],
+        "created": now,
+        "updated": now,
+        "version": 1,
+        "type": article_type,
+        "domain": effective_domain,
+        "tags": effective_tags,
+        "status": status,
+        "confidence": confidence,
+        "sources": source_links,
+        "source_count": len(source_links),
+        "related": related_links,
+        "word_count": word_count,
+        "read_time_min": read_time,
+        "backlink_count": 0,
+    }
+
+    # Write the compiled article.
+    path = ops.write_compiled_article(article_type + "s", filename, metadata, body)
+
+    # Register in state.
+    state_mgr = StateManager(vault.oar_dir)
+    state_mgr.register_article(
+        article_id,
+        str(path.relative_to(vault.path)),
+        content_hash_string(body),
+    )
+
+    # Update compiled count in stats.
+    state = state_mgr.load()
+    compiled_count = len(ops.list_compiled_articles())
+    state.setdefault("stats", {})["compiled_articles"] = compiled_count
+    state["stats"]["total_words"] = state["stats"].get("total_words", 0) + word_count
+    state_mgr.save(state)
+
+    # Mark source raw articles as compiled.
+    if source_ids:
+        for raw_id in source_ids:
+            state_mgr.mark_compiled(raw_id, [article_id])
+
+    return {
+        "article_id": article_id,
+        "title": title,
+        "path": str(path),
+        "word_count": word_count,
+    }
+
+
+def tool_mark_raw_compiled(
+    raw_article_id: str,
+    compiled_article_id: str,
+) -> dict[str, Any]:
+    """Mark a raw article as compiled, linked to its compiled output.
+
+    Args:
+        raw_article_id: The raw article ID to mark as compiled
+        compiled_article_id: The compiled article ID it was compiled into
+    """
+    from oar.core.state import StateManager
+
+    vault, ops, *_ = _build_components()
+    state_mgr = StateManager(vault.oar_dir)
+    state_mgr.mark_compiled(raw_article_id, [compiled_article_id])
+
+    return {
+        "status": "ok",
+        "raw_id": raw_article_id,
+        "compiled_id": compiled_article_id,
+    }
+
+
+def tool_build_indices() -> dict[str, Any]:
+    """Rebuild all wiki indices: MOCs, tag pages, orphan/stub lists, master index.
+
+    Run after adding or updating articles to keep cross-references current.
+    """
+    from oar.core.link_resolver import LinkResolver
+    from oar.index.moc_builder import MocBuilder
+    from oar.index.orphan_tracker import OrphanTracker
+    from oar.index.tag_builder import TagBuilder
+
+    vault, ops, *_ = _build_components()
+
+    # Build MOCs.
+    moc_builder = MocBuilder(vault, ops)
+    mocs = moc_builder.auto_generate_mocs()
+
+    # Build tag pages.
+    tag_builder = TagBuilder(vault, ops)
+    tag_pages = tag_builder.auto_generate_tags()
+
+    # Build orphan and stub pages.
+    link_resolver = LinkResolver(vault, ops)
+    orphan_tracker = OrphanTracker(vault, ops, link_resolver)
+    orphans = orphan_tracker.write_orphans_page()
+    stubs = orphan_tracker.write_stubs_page()
+    orphan_tracker.write_recent_page()
+
+    # Build master index.
+    moc_list = moc_builder.list_mocs()
+    moc_builder.build_master_index(moc_list)
+
+    return {
+        "mocs": len(mocs),
+        "tags": len(tag_pages),
+        "orphans": len(orphans),
+        "stubs": len(stubs),
+    }
+
+
 # ------------------------------------------------------------------
 # Tool registry
 # ------------------------------------------------------------------
@@ -316,5 +574,106 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             "properties": {},
         },
         "handler": tool_list_mocs,
+    },
+    "get_pending_articles": {
+        "description": "Get raw articles that need compiling, with their status (NEW, UNCOMPILED, or UPDATED)",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": tool_get_pending_articles,
+    },
+    "read_raw_article": {
+        "description": "Read a raw (uncompiled) article by ID, returning metadata and full body",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "article_id": {
+                    "type": "string",
+                    "description": "The raw article ID to read",
+                },
+            },
+            "required": ["article_id"],
+        },
+        "handler": tool_read_raw_article,
+    },
+    "save_compiled_article": {
+        "description": "Save a compiled wiki article. Handles frontmatter, file placement, state tracking, and marking source raw articles as compiled.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Article title",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Full article body in markdown (with [[wikilinks]])",
+                },
+                "article_type": {
+                    "type": "string",
+                    "description": "Article type: concept, method, comparison, entity, tutorial, timeline",
+                    "default": "concept",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of tags",
+                },
+                "domain": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Domain categories (e.g. ['machine-learning', 'nlp']). Derived from tags if not provided.",
+                },
+                "related": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Related article IDs (wrapped in [[ ]] automatically)",
+                },
+                "source_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Raw article IDs this was compiled from (marks them as compiled)",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Article status: stub, draft, mature, review",
+                    "default": "draft",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence score 0.0-1.0",
+                    "default": 0.9,
+                },
+            },
+            "required": ["title", "body"],
+        },
+        "handler": tool_save_compiled_article,
+    },
+    "mark_raw_compiled": {
+        "description": "Mark a raw article as compiled, linked to its compiled output",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "raw_article_id": {
+                    "type": "string",
+                    "description": "The raw article ID to mark as compiled",
+                },
+                "compiled_article_id": {
+                    "type": "string",
+                    "description": "The compiled article ID it was compiled into",
+                },
+            },
+            "required": ["raw_article_id", "compiled_article_id"],
+        },
+        "handler": tool_mark_raw_compiled,
+    },
+    "build_indices": {
+        "description": "Rebuild all wiki indices: MOCs, tag pages, orphan/stub lists, master index",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": tool_build_indices,
     },
 }
