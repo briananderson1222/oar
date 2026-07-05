@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,28 +12,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from oar.cli._shared import resolve_vault
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
 from oar.search.indexer import SearchIndexer
-from oar.search.ranker import rank_results
 from oar.search.searcher import Searcher
 
 console = Console()
-
-
-def _find_vault_path() -> Optional[Path]:
-    """Resolve vault path — prefer OAR_VAULT env var, else walk up from cwd."""
-    env_path = os.environ.get("OAR_VAULT")
-    if env_path:
-        p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
-
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
-    return None
 
 
 def _get_or_build_index(vault_path: Path) -> Path:
@@ -59,14 +43,18 @@ def search_cmd(
     rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild search index"),
     serve: bool = typer.Option(False, "--serve", help="Start the web search UI"),
     port: int = typer.Option(3232, "--port", help="Port for the web UI"),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Search the compiled wiki."""
-    vault_path = _find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, _vault_source = resolved
 
     if serve:
         from oar.search.server import create_app
@@ -93,17 +81,18 @@ def search_cmd(
         console.print(f"[green]Rebuilt search index with {count} articles.[/green]")
 
     db_path = _get_or_build_index(vault_path)
-    searcher = Searcher(db_path)
+    vault = Vault(vault_path)
+    ops = VaultOps(vault)
+    # Pass vault/ops so the searcher stat-syncs the index before querying.
+    searcher = Searcher(db_path, vault=vault, ops=ops)
 
+    # Ranking (title boost + backlink boost) is applied inside Searcher.search.
     results = searcher.search(
         query,
         limit=limit,
         type_filter=type,
         domain_filter=domain,
     )
-
-    # Apply re-ranking.
-    results = rank_results(results, query)
 
     searcher.close()
 

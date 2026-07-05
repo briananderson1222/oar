@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from oar.cli._shared import find_vault_path, build_router
+from oar.cli._shared import build_router, emit_vault_banner, resolve_vault
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
 from oar.lint.reporter import LintReporter
@@ -33,15 +33,22 @@ def lint_cmd(
     web_search: bool = typer.Option(
         False, "--web-search", help="Search web for missing metadata."
     ),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Run health checks and maintenance on the wiki."""
     # Locate vault.
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    # Echo the resolved vault only when this run will write to disk (reports/fixes).
+    if report or fix:
+        emit_vault_banner(console, vault_path, vault_source)
 
     vault = Vault(vault_path)
     ops = VaultOps(vault)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from oar.cli._shared import emit_vault_banner, resolve_vault
 from oar.core.frontmatter import FrontmatterManager
 from oar.core.hashing import content_hash_string
 from oar.core.state import StateManager
@@ -19,21 +19,6 @@ from oar.ingest.file_importer import FileImporter
 from oar.ingest.metadata import generate_raw_metadata
 
 console = Console()
-
-
-def _find_vault_path() -> Optional[Path]:
-    """Resolve vault path — prefer OAR_VAULT env var, else walk up from cwd."""
-    env_path = os.environ.get("OAR_VAULT")
-    if env_path:
-        p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
-
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
-    return None
 
 
 def ingest(
@@ -57,14 +42,19 @@ def ingest(
     published: Optional[str] = typer.Option(
         None, "--published", help="Optional published date metadata."
     ),
+    vault_opt: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Import documents into the vault's raw directory."""
-    vault_path = _find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault_opt)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     vault = Vault(vault_path)
 

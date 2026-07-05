@@ -57,17 +57,33 @@ class TagBuilder:
         self.fm.write(path, metadata, body)
         return path
 
-    def auto_generate_tags(self) -> list[Path]:
+    def auto_generate_tags(self, prune: bool = False) -> list[Path]:
         """Scan all compiled articles, collect tags, generate tag pages.
 
-        Returns list of created/updated tag page paths.
+        Returns list of created/updated tag page paths. When *prune* is True this
+        is a true rebuild: any auto-generated ``tag-*.md`` page that was not
+        regenerated in this run (its tag no longer exists on any article) is
+        deleted. Only files matching the generated ``tag-*.md`` pattern are ever
+        removed — user files elsewhere are never touched.
         """
         tag_articles = self.list_tags()
         created: list[Path] = []
         for tag, article_ids in sorted(tag_articles.items()):
             path = self.build_tag_page(tag, article_ids)
             created.append(path)
+        if prune:
+            self._prune_stale(created)
         return created
+
+    def _prune_stale(self, kept: list[Path]) -> None:
+        """Delete ``tag-*.md`` pages under 03-indices/tags/ not in *kept*."""
+        tag_dir = self.vault.indices_dir / "tags"
+        if not tag_dir.is_dir():
+            return
+        kept_names = {p.name for p in kept}
+        for page in tag_dir.glob("tag-*.md"):
+            if page.name not in kept_names:
+                page.unlink()
 
     def list_tags(self) -> dict[str, list[str]]:
         """Return {tag_name: [article_ids]} for all tags across compiled articles."""

@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from oar.cli._shared import find_vault_path, build_router
+from oar.cli._shared import build_router, emit_vault_banner, resolve_vault
 from oar.compile.compiler import Compiler, CompileOptions, CompileResult
 from oar.compile.incremental import IncrementalCompiler
 from oar.compile.profiles import list_profiles
@@ -95,14 +95,19 @@ def compile_cmd(
     max_cost: float = typer.Option(
         5.00, "--max-cost", help="Maximum spend in USD for --all."
     ),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Compile raw articles into wiki articles using LLM."""
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     router, cost_tracker, config = build_router(vault_path, model, provider)
     vault = Vault(vault_path)

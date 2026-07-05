@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from oar.cli._shared import find_vault_path
+from oar.cli._shared import resolve_vault
 from oar.core.frontmatter import FrontmatterManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -20,14 +20,18 @@ console = Console()
 def validate_cmd(
     article_id: str = typer.Argument(..., help="Article ID to validate."),
     fix: bool = typer.Option(False, "--fix", help="Auto-fix fixable issues."),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Validate a single article's structure, frontmatter, and links."""
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, _vault_source = resolved
 
     vault = Vault(vault_path)
     ops = VaultOps(vault)

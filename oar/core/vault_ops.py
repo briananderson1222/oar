@@ -72,13 +72,32 @@ class VaultOps:
     # ------------------------------------------------------------------
 
     def get_article_by_id(self, article_id: str) -> Path | None:
-        """Search for an article with matching ``id`` in frontmatter.
+        """Resolve an article path from its ``id``.
 
-        Scans both raw and compiled directories. Also matches by slugified
-        title or filename stem when no ``id`` field exists.
+        Fast path: consult the StateManager articles map for a recorded path and
+        return it when the file still exists on disk. This turns the common case
+        into an O(1) lookup instead of an O(n) full-vault frontmatter scan.
+
+        Fallback: when the id is not in state (e.g. articles written directly
+        without registration) or the recorded path is stale, scan both raw and
+        compiled directories, matching by ``id`` and then by slugified title or
+        filename stem.
         """
         from oar.core.slug import slugify
+        from oar.core.state import StateManager
 
+        # Fast path — state map.
+        try:
+            state = StateManager(self.vault.oar_dir).load()
+            entry = state.get("articles", {}).get(article_id)
+        except Exception:
+            entry = None
+        if entry and entry.get("path"):
+            candidate = self.vault.path / entry["path"]
+            if candidate.exists():
+                return candidate
+
+        # Fallback — scan both directories.
         candidates = self.list_raw_articles() + self.list_compiled_articles()
         for path in candidates:
             meta, _ = self.fm.read(path)

@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from oar.cli._shared import find_vault_path, build_router
+from oar.cli._shared import build_router, emit_vault_banner, resolve_vault
 from oar.compile.compiler import CompileOptions, Compiler
 from oar.cli._shared import VALID_PROVIDERS
 from oar.core.hashing import content_hash
@@ -48,15 +48,20 @@ def build_cmd(
     profile: Optional[str] = typer.Option(
         None, "--profile", help="Compile profile to use during the compile step."
     ),
+    vault_opt: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Build the vault: compile raw → generate indices → lint check."""
     # --- Resolve vault ------------------------------------------------
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault_opt)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     vault = Vault(vault_path)
     ops = VaultOps(vault)
@@ -167,12 +172,12 @@ def build_cmd(
         resolver = LinkResolver(vault, ops)
         orphan_tracker = OrphanTracker(vault, ops, resolver)
 
-        mocs = moc_builder.auto_generate_mocs()
+        mocs = moc_builder.auto_generate_mocs(prune=True)
         moc_data = moc_builder.list_mocs()
         moc_builder.build_master_index(moc_data)
         moc_count = len(mocs)
 
-        tags = tag_builder.auto_generate_tags()
+        tags = tag_builder.auto_generate_tags(prune=True)
         tag_count = len(tags)
 
         orphans = orphan_tracker.write_orphans_page()

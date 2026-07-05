@@ -254,6 +254,59 @@ class TestWebAugmenter:
         assert len(issues) >= 1
         assert issues[0].category == "web-augment"
 
+    def test_augment_fills_source_url_from_source_key(self, tmp_vault):
+        """The `source` key backfills the missing `source_url` field."""
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        _write_compiled(ops, "concepts", "test.md", "test", "Test Article", "Content.")
+
+        augmenter = WebAugmenter(vault, ops)
+        fake = [{"snippet": "About the topic.", "source": "https://example.com/x"}]
+        with patch.object(augmenter, "_search", return_value=fake):
+            issues = augmenter.augment_article("test")
+
+        messages = [i.message for i in issues]
+        assert any("https://example.com/x" in m for m in messages)
+        assert any("source url" in m.lower() for m in messages)
+
+    def test_augment_does_not_invent_author_or_date(self, tmp_vault):
+        """Author/date are never mapped when the result dict lacks those keys."""
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        _write_compiled(ops, "concepts", "test.md", "test", "Test Article", "Content.")
+
+        augmenter = WebAugmenter(vault, ops)
+        # Result carries only snippet/source — no author, no date.
+        fake = [{"snippet": "About the topic.", "source": "https://example.com/x"}]
+        with patch.object(augmenter, "_search", return_value=fake):
+            issues = augmenter.augment_article("test")
+
+        messages = " ".join(i.message for i in issues).lower()
+        assert "found author" not in messages
+        assert "found date" not in messages
+
+    def test_augment_maps_author_and_date_when_present(self, tmp_vault):
+        """A richer backend supplying author/date is honored."""
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        _write_compiled(ops, "concepts", "test.md", "test", "Test Article", "Content.")
+
+        augmenter = WebAugmenter(vault, ops)
+        fake = [
+            {
+                "snippet": "x",
+                "source": "https://example.com/x",
+                "author": "Ada Lovelace",
+                "date": "1843-01-01",
+            }
+        ]
+        with patch.object(augmenter, "_search", return_value=fake):
+            issues = augmenter.augment_article("test")
+
+        messages = " ".join(i.message for i in issues)
+        assert "Ada Lovelace" in messages
+        assert "1843-01-01" in messages
+
 
 class TestLintCLICoverage:
     """CLI --coverage flag tests."""

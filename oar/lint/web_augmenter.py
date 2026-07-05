@@ -85,9 +85,28 @@ class WebAugmenter:
             ]
 
         # Parse the first result to fill gaps.
+        #
+        # ``_search`` returns result dicts shaped like ``{"snippet": ..., "source": ...}``.
+        # We only map keys that actually exist on the result — the ``source`` key
+        # backfills ``source_url`` (the one field we can reliably recover from a
+        # web search). ``author``/``published`` are only mapped when a result
+        # genuinely carries ``author``/``date`` keys, which the current DuckDuckGo
+        # backend does not provide (but a richer backend could).
         top_result = results[0]
         updates: dict[str, Any] = {}
         issues: list[LintIssue] = []
+
+        if "source_url" in missing and top_result.get("source"):
+            updates["source_url"] = top_result["source"]
+            issues.append(
+                LintIssue(
+                    severity="info",
+                    category="web-augment",
+                    article_id=article_id,
+                    message=f"Found source URL: {top_result['source']}",
+                    suggestion="Run with --fix to apply",
+                )
+            )
 
         if "author" in missing and "author" in top_result:
             updates["author"] = top_result["author"]

@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from oar.cli._shared import build_router, find_vault_path
+from oar.cli._shared import build_router, emit_vault_banner, resolve_vault
 from oar.core.link_resolver import LinkResolver
 from oar.core.state import StateManager
 from oar.core.vault import Vault
@@ -36,14 +36,19 @@ def index_cmd(
         "--detect-clusters",
         help="Detect concept clusters and build cluster pages.",
     ),
+    vault_opt: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Manage auto-generated index files (MOCs, tags, master index)."""
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault_opt)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     vault = Vault(vault_path)
     ops = VaultOps(vault)
@@ -65,21 +70,21 @@ def index_cmd(
         actions.append(f"Detected and built {len(cluster_paths)} cluster page(s)")
 
     elif mocs_only:
-        # Generate MOCs only.
-        mocs = moc_builder.auto_generate_mocs()
+        # Generate MOCs only (prune stale auto-generated MOC pages).
+        mocs = moc_builder.auto_generate_mocs(prune=True)
         moc_data = moc_builder.list_mocs()
         moc_builder.build_master_index(moc_data)
         actions.append(f"Generated {len(mocs)} MOCs")
     elif tags_only:
-        # Generate tag pages only.
-        tags = tag_builder.auto_generate_tags()
+        # Generate tag pages only (prune stale auto-generated tag pages).
+        tags = tag_builder.auto_generate_tags(prune=True)
         actions.append(f"Generated {len(tags)} tag pages")
     else:
-        # Full rebuild or update.
-        mocs = moc_builder.auto_generate_mocs()
+        # Full rebuild or update — regenerate everything and prune stale pages.
+        mocs = moc_builder.auto_generate_mocs(prune=True)
         moc_data = moc_builder.list_mocs()
         moc_builder.build_master_index(moc_data)
-        tags = tag_builder.auto_generate_tags()
+        tags = tag_builder.auto_generate_tags(prune=True)
         orphans = orphan_tracker.write_orphans_page()
         stubs = orphan_tracker.write_stubs_page()
         orphan_tracker.write_recent_page()

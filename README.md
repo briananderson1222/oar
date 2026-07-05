@@ -106,7 +106,53 @@ Each wiki article has YAML frontmatter with metadata and `[[wikilinks]]` for cro
 | `oar status` | Show vault statistics |
 | `oar config` | Read/set configuration |
 | `oar export` | Export to HTML, slides, or fine-tune data |
+| `oar vault` | Manage named vaults (add/list/remove/default) |
 | `oar mcp` | Start MCP server for IDE integration |
+
+## Multi-vault
+
+Work with more than one vault safely. Every command that touches a vault
+resolves it through a single, predictable precedence and — for any command that
+**writes** — echoes exactly which vault it chose before doing anything:
+
+```
+vault: /Users/me/work-vault (via cwd)
+```
+
+### Named-vault registry
+
+Register vaults by name so you can switch with `--vault NAME` from anywhere. The
+registry lives at `~/.config/oar/vaults.yaml` (honoring `XDG_CONFIG_HOME`).
+
+```bash
+oar vault add work   ~/work-vault     # first vault added becomes the default
+oar vault add notes  ~/personal-notes
+oar vault list                        # shows ★ default and → the one resolving now
+oar vault default notes               # change the fallback default
+oar vault remove work
+
+# Use a named vault (or a raw path) for a single command:
+oar search "transformers" --vault notes
+oar build --vault ~/some/other/vault
+```
+
+### Resolution precedence
+
+The first valid vault (one containing `.oar/state.json`) wins:
+
+| # | Source | `via` label | How it's set |
+|---|--------|-------------|--------------|
+| 1 | Explicit `--vault` | `registry:<name>` or `explicit path` | A registry name (preferred) or a filesystem path |
+| 2 | Current directory | `cwd` | Walking up from your working directory |
+| 3 | `OAR_VAULT` env var | `OAR_VAULT env` | Exported environment variable |
+| 4 | Registry default | `registry default` | `oar vault default NAME` |
+
+> **Why cwd beats `OAR_VAULT`:** a globally-exported `OAR_VAULT` must never
+> silently override the vault you are standing in. Standing inside a vault always
+> targets that vault unless you pass `--vault` explicitly.
+
+The MCP tools follow the same precedence, and every tool accepts an optional
+`vault` argument (a registry name or a path) to target a specific vault.
 
 ## LLM Providers
 
@@ -152,6 +198,11 @@ oar mcp
 | `get_wiki_context` | Retrieve relevant wiki context for agent-driven Q&A without an internal LLM call |
 | `get_status` | Vault statistics |
 | `list_mocs` | List Maps of Content |
+
+**Every tool** also accepts an optional `vault` argument — a registry name or a
+filesystem path — to target a specific vault. When omitted, the tool resolves
+the active vault using the same precedence as the CLI (`cwd` > `OAR_VAULT` >
+registry default).
 
 ### Setup: Claude Desktop
 

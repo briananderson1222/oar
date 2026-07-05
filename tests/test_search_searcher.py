@@ -180,3 +180,96 @@ class TestGetStats:
         assert "by_type" in stats
         assert stats["by_type"]["concept"] == 2
         assert stats["by_type"]["method"] == 1
+
+
+class TestRankingIntegration:
+    """Title-boost re-rank is applied inside Searcher.search (oar#3.3)."""
+
+    def test_exact_title_outranks_body_only(self, tmp_vault):
+        ops = VaultOps(Vault(tmp_vault))
+        # Query matches this article's TITLE.
+        ops.write_compiled_article(
+            "concepts",
+            "vector-database.md",
+            {
+                "id": "vector-database",
+                "title": "Vector Database",
+                "type": "concept",
+                "status": "draft",
+            },
+            "A vector database stores embeddings for retrieval.",
+        )
+        # This article only mentions the query in a long body (diluted bm25).
+        ops.write_compiled_article(
+            "concepts",
+            "storage.md",
+            {
+                "id": "storage",
+                "title": "Storage Systems",
+                "type": "concept",
+                "status": "draft",
+            },
+            "vector database " + ("filler content about disks and tapes " * 60),
+        )
+        db_path = tmp_vault / ".oar" / "search-index" / "search.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        idx = SearchIndexer(db_path)
+        idx.index_vault(Vault(tmp_vault), ops)
+        idx.close()
+
+        s = Searcher(db_path)
+        results = s.search("vector database")
+        s.close()
+
+        assert results[0].article_id == "vector-database"
+
+
+class TestSearchStaleness:
+    """Searcher constructed with vault/ops stat-syncs before each query."""
+
+    def test_search_reflects_add_modify_delete(self, tmp_vault):
+        ops = VaultOps(Vault(tmp_vault))
+        ops.write_compiled_article(
+            "concepts",
+            "alpha.md",
+            {"id": "alpha", "title": "Alpha", "type": "concept", "status": "draft"},
+            "Alpha talks about apples.",
+        )
+        ops.write_compiled_article(
+            "concepts",
+            "beta.md",
+            {"id": "beta", "title": "Beta", "type": "concept", "status": "draft"},
+            "Beta talks about bananas.",
+        )
+        db_path = tmp_vault / ".oar" / "search-index" / "search.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        idx = SearchIndexer(db_path)
+        idx.index_vault(Vault(tmp_vault), ops)
+        idx.close()
+
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        s = Searcher(db_path, vault=vault, ops=ops)
+
+        # Baseline.
+        assert any(r.article_id == "alpha" for r in s.search("apples"))
+
+        # ADD a new article — search sees it without an explicit rebuild.
+        ops.write_compiled_article(
+            "concepts",
+            "gamma.md",
+            {"id": "gamma", "title": "Gamma", "type": "concept", "status": "draft"},
+            "Gamma talks about cherries.",
+        )
+        assert any(r.article_id == "gamma" for r in s.search("cherries"))
+
+        # MODIFY beta to mention a new term.
+        beta = tmp_vault / "02-compiled" / "concepts" / "beta.md"
+        beta.write_text(beta.read_text() + "\n\nAlso covers dragonfruit.\n")
+        assert any(r.article_id == "beta" for r in s.search("dragonfruit"))
+
+        # DELETE alpha — it disappears from results.
+        (tmp_vault / "02-compiled" / "concepts" / "alpha.md").unlink()
+        assert all(r.article_id != "alpha" for r in s.search("apples"))
+
+        s.close()

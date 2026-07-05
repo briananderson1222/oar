@@ -593,3 +593,37 @@ class TestMCPServerCreation:
             assert hasattr(server, "call_tool")
         except ImportError:
             pytest.skip("mcp package not installed")
+
+
+class TestMCPVaultParam:
+    """Every MCP tool accepts an optional `vault` override, same precedence as CLI."""
+
+    def test_every_tool_schema_exposes_vault(self):
+        for name, defn in TOOL_DEFINITIONS.items():
+            props = defn["parameters"]["properties"]
+            assert "vault" in props, f"{name} schema missing vault param"
+            assert props["vault"]["type"] == "string"
+
+    def test_explicit_vault_path_selects_vault(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OAR_VAULT", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        a = Vault(tmp_path / "A")
+        a.init()
+        monkeypatch.chdir(tmp_path)  # cwd is not itself a vault
+        result = tool_get_status(vault=str(a.path))
+        assert result["vault_path"] == str(a.path.resolve())
+
+    def test_incident_env_never_overrides_cwd(self, tmp_path, monkeypatch):
+        """OAR_VAULT=A, cwd inside B → tools resolve B; explicit --vault beats both."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        a = Vault(tmp_path / "A")
+        a.init()
+        b = Vault(tmp_path / "B")
+        b.init()
+        monkeypatch.setenv("OAR_VAULT", str(a.path))
+        monkeypatch.chdir(b.path)
+
+        # No explicit vault → cwd (B) wins over OAR_VAULT env (A).
+        assert tool_get_status()["vault_path"] == str(b.path.resolve())
+        # Explicit path to A overrides everything.
+        assert tool_get_status(vault=str(a.path))["vault_path"] == str(a.path.resolve())

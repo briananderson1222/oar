@@ -23,6 +23,8 @@ from oar.cli.export import export_cmd
 from oar.cli.lint import lint_cmd
 from oar.cli.search import search_cmd
 from oar.cli.validate import validate_cmd
+from oar.cli.vault_cmd import vault_app
+from oar.cli._shared import resolve_vault
 from oar.compile.profiles import list_profiles
 from oar.core.config import OarConfig
 from oar.core.vault import Vault
@@ -57,6 +59,7 @@ app.command(name="export")(export_cmd)
 app.command(name="add-note")(add_note_cmd)
 app.command(name="validate")(validate_cmd)
 app.command(name="build")(build_cmd)
+app.add_typer(vault_app, name="vault")
 
 
 @app.command()
@@ -64,9 +67,12 @@ def profiles(
     show: Optional[str] = typer.Option(
         None, "--show", help="Show details for a specific compile profile."
     ),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """List or inspect compile profiles."""
-    vault_path = _find_vault_path()
+    vault_path = _find_vault_path(vault)
     config = OarConfig.load(vault_path / ".oar" / "config.yaml") if vault_path else OarConfig()
     profiles_data = list_profiles(config)
 
@@ -98,19 +104,10 @@ def profiles(
     console.print(table)
 
 
-def _find_vault_path() -> Optional[Path]:
-    """Resolve vault path — prefer OAR_VAULT env var, else walk up from cwd."""
-    env_path = os.environ.get("OAR_VAULT")
-    if env_path:
-        p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
-
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
-    return None
+def _find_vault_path(explicit: Optional[str] = None) -> Optional[Path]:
+    """Resolve the vault path via the shared resolver (returns path only)."""
+    result = resolve_vault(explicit)
+    return result[0] if result else None
 
 
 @app.command()
@@ -137,9 +134,12 @@ def status(
     providers: bool = typer.Option(
         False, "--providers", help="Show detected LLM CLI providers."
     ),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Show vault statistics."""
-    vault_path = _find_vault_path()
+    vault_path = _find_vault_path(vault)
     if vault_path is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
@@ -211,9 +211,12 @@ def config_cmd(
     ),
     value: Optional[str] = typer.Argument(None, help="Value to set"),
     list_all: bool = typer.Option(False, "--list", "-l", help="Show all config values"),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Read or set OAR configuration values."""
-    vault_path = _find_vault_path()
+    vault_path = _find_vault_path(vault)
     if vault_path is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
