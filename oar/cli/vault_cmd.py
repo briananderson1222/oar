@@ -67,9 +67,14 @@ def vault_list() -> None:
         console.print(table)
 
     if resolved:
+        # soft_wrap keeps this a single physical line at any terminal width —
+        # long absolute paths would otherwise wrap mid-token (e.g. "via \ncwd"),
+        # breaking greppability and the CI assertion. Same rule as the
+        # mutating-command banner in _shared.py.
         console.print(
             f"\n[dim]Resolves now:[/dim] {resolved_path} "
-            f"[dim](via {resolved_source})[/dim]"
+            f"[dim](via {resolved_source})[/dim]",
+            soft_wrap=True,
         )
     else:
         console.print("\n[dim]No vault resolves from the current directory/env.[/dim]")
