@@ -23,6 +23,7 @@ from oar.cli.export import export_cmd
 from oar.cli.lint import lint_cmd
 from oar.cli.search import search_cmd
 from oar.cli.validate import validate_cmd
+from oar.compile.profiles import list_profiles
 from oar.core.config import OarConfig
 from oar.core.vault import Vault
 
@@ -56,6 +57,45 @@ app.command(name="export")(export_cmd)
 app.command(name="add-note")(add_note_cmd)
 app.command(name="validate")(validate_cmd)
 app.command(name="build")(build_cmd)
+
+
+@app.command()
+def profiles(
+    show: Optional[str] = typer.Option(
+        None, "--show", help="Show details for a specific compile profile."
+    ),
+) -> None:
+    """List or inspect compile profiles."""
+    vault_path = _find_vault_path()
+    config = OarConfig.load(vault_path / ".oar" / "config.yaml") if vault_path else OarConfig()
+    profiles_data = list_profiles(config)
+
+    if show:
+        profile = profiles_data.get(show)
+        if not profile:
+            console.print(f"[bold red]Unknown profile:[/bold red] {show}")
+            raise typer.Exit(code=1)
+        table = Table(title=f"Compile Profile: {show}", show_header=False)
+        for key in ("description", "prompt_template", "default_type", "source_types", "output_schema"):
+            table.add_row(key, str(profile.get(key)))
+        console.print(table)
+        return
+
+    table = Table(title="Compile Profiles", show_header=True)
+    table.add_column("Profile", style="cyan")
+    table.add_column("Default Type", style="green")
+    table.add_column("Source Types", style="yellow")
+    table.add_column("Prompt", style="magenta")
+    table.add_column("Description", style="white")
+    for name, profile in profiles_data.items():
+        table.add_row(
+            name,
+            str(profile.get("default_type", "")),
+            ", ".join(profile.get("source_types", [])),
+            str(profile.get("prompt_template", "")),
+            str(profile.get("description", "")),
+        )
+    console.print(table)
 
 
 def _find_vault_path() -> Optional[Path]:

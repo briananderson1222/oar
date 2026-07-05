@@ -97,6 +97,31 @@ class TestAddNote:
         assert meta["type"] == "method"
         assert "methods" in str(path)
 
+    def test_add_note_with_summary_type(self, tmp_vault, monkeypatch):
+        """Add a generic summary note."""
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        result = runner.invoke(
+            app,
+            [
+                "add-note",
+                "--title",
+                "Transcript Summary",
+                "--type",
+                "summary",
+                "--body",
+                "Summarized transcript content.",
+            ],
+        )
+        assert result.exit_code == 0
+
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        path = ops.get_article_by_id("transcript-summary")
+        fm = FrontmatterManager()
+        meta, _ = fm.read(path)
+        assert meta["type"] == "summary"
+        assert "summaries" in str(path)
+
     def test_add_note_with_related(self, tmp_vault, monkeypatch):
         """Add a note with related article links."""
         monkeypatch.setenv("OAR_VAULT", str(tmp_vault))

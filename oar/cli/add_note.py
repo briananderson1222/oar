@@ -13,6 +13,7 @@ from rich.panel import Panel
 
 from oar.cli._shared import find_vault_path
 from oar.core.frontmatter import FrontmatterManager
+from oar.core.models import VALID_COMPILED_TYPES, compiled_subdir_for
 from oar.core.slug import slugify
 from oar.core.state import StateManager
 from oar.core.vault import Vault
@@ -20,7 +21,7 @@ from oar.core.vault_ops import VaultOps
 
 console = Console()
 
-VALID_TYPES = ("concept", "entity", "method", "comparison", "tutorial", "timeline")
+VALID_TYPES = VALID_COMPILED_TYPES
 
 
 def add_note_cmd(
@@ -136,7 +137,7 @@ def add_note_cmd(
     # Write the article.
     vault = Vault(vault_path)
     ops = VaultOps(vault)
-    path = ops.write_compiled_article(type + "s", filename, metadata, note_body)
+    path = ops.write_compiled_article(compiled_subdir_for(type), filename, metadata, note_body)
 
     # Update state.
     state_mgr = StateManager(vault.oar_dir)

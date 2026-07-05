@@ -15,7 +15,6 @@ from oar.mcp_tools import (
     tool_list_articles,
     tool_list_mocs,
     tool_mark_raw_compiled,
-    tool_query_wiki,
     tool_read_article,
     tool_read_raw_article,
     tool_save_compiled_article,
@@ -79,11 +78,10 @@ class TestMCPToolDefinitions:
             assert "properties" in schema, f"{name} missing properties"
 
     def test_expected_tools_registered(self):
-        """All 12 expected tools are registered."""
+        """All expected retrieval/write MCP tools are registered."""
         expected = {
             "search_wiki",
             "read_article",
-            "query_wiki",
             "get_status",
             "list_mocs",
             "list_articles",
@@ -570,20 +568,6 @@ class TestBuildRouterProviderValidation:
 
         with pytest.raises(ValueError, match="Invalid provider.*gpt-4"):
             build_router(tmp_vault, provider="gpt-4")
-
-    def test_query_wiki_invalid_provider_raises(self, tmp_vault, monkeypatch):
-        """query_wiki rejects invalid provider name."""
-        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
-        with pytest.raises(ValueError, match="Invalid provider.*fake-llm"):
-            tool_query_wiki(question="test", provider="fake-llm")
-
-    def test_query_wiki_schema_has_provider_param(self):
-        """query_wiki MCP schema includes provider and model params."""
-        schema = TOOL_DEFINITIONS["query_wiki"]["parameters"]
-        props = schema["properties"]
-        assert "provider" in props
-        assert "model" in props
-        assert "max_cost" in props
 
 
 class TestMCPServerCreation:

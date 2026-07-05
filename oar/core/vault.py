@@ -29,6 +29,9 @@ REQUIRED_DIRS: list[str] = [
     "02-compiled/comparisons",
     "02-compiled/tutorials",
     "02-compiled/timelines",
+    "02-compiled/summaries",
+    "02-compiled/briefs",
+    "02-compiled/notes",
     "03-indices",
     "03-indices/moc",
     "03-indices/tags",
@@ -56,6 +59,9 @@ INDEX_DIRS: list[str] = [
     "02-compiled/comparisons",
     "02-compiled/tutorials",
     "02-compiled/timelines",
+    "02-compiled/summaries",
+    "02-compiled/briefs",
+    "02-compiled/notes",
     "03-indices",
     "03-indices/moc",
     "03-indices/tags",
@@ -107,6 +113,14 @@ llm:
 compile:
   default_type: "concept"
   auto_index: true
+  profile: "default"
+  source_type_profiles:
+    article: "default"
+    paper: "paper-summary"
+    repo: "repo-architecture"
+    transcript: "transcript-summary"
+    video: "transcript-summary"
+    meeting: "meeting-brief"
 """
 
 

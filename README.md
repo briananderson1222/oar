@@ -149,7 +149,7 @@ oar mcp
 | `search_wiki` | Full-text search |
 | `read_article` | Read a compiled article |
 | `list_articles` | List/filter compiled articles |
-| `query_wiki` | Ask questions against the wiki |
+| `get_wiki_context` | Retrieve relevant wiki context for agent-driven Q&A without an internal LLM call |
 | `get_status` | Vault statistics |
 | `list_mocs` | List Maps of Content |
 

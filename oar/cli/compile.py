@@ -11,11 +11,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from oar.cli._shared import find_vault_path, build_router
-from oar.compile.compiler import Compiler, CompileResult
+from oar.compile.compiler import Compiler, CompileOptions, CompileResult
 from oar.compile.incremental import IncrementalCompiler
+from oar.compile.profiles import list_profiles
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
+from oar.cli._shared import VALID_PROVIDERS
 
 console = Console()
 
@@ -67,8 +69,28 @@ def compile_cmd(
         "--pending",
         help="Show articles needing compilation (incremental detection).",
     ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", help="Compile profile to use."
+    ),
+    prompt_template: Optional[str] = typer.Option(
+        None, "--prompt-template", help="Prompt template filename from .oar/prompts or built-in prompts."
+    ),
+    output_schema: Optional[str] = typer.Option(
+        None, "--output-schema", help="Additional output-shape guidance passed into the compile prompt."
+    ),
+    context_file: Optional[str] = typer.Option(
+        None, "--context-file", help="Optional file with extra authoring constraints."
+    ),
+    describe: bool = typer.Option(
+        False, "--describe", help="Show available compile profiles and the active compile configuration."
+    ),
     model: Optional[str] = typer.Option(
         None, "--model", "-m", help="Override default LLM model."
+    ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help=f"LLM provider to force for compile ({', '.join(sorted(VALID_PROVIDERS))}).",
     ),
     max_cost: float = typer.Option(
         5.00, "--max-cost", help="Maximum spend in USD for --all."
@@ -82,11 +104,44 @@ def compile_cmd(
         )
         raise typer.Exit(code=1)
 
-    router, cost_tracker, config = build_router(vault_path, model)
+    router, cost_tracker, config = build_router(vault_path, model, provider)
     vault = Vault(vault_path)
     ops = VaultOps(vault)
     state_mgr = StateManager(vault.oar_dir)
-    compiler = Compiler(vault, ops, router, state_mgr)
+    compiler = Compiler(vault, ops, router, state_mgr, config=config)
+    extra_context = Path(context_file).read_text() if context_file else None
+    compile_options = CompileOptions(
+        profile=profile,
+        prompt_template=prompt_template,
+        output_schema=output_schema,
+        context_text=extra_context,
+    )
+
+    if describe:
+        profiles = list_profiles(config)
+        table = Table(title="Compile Profiles", show_header=True)
+        table.add_column("Profile", style="cyan")
+        table.add_column("Default Type", style="green")
+        table.add_column("Source Types", style="yellow")
+        table.add_column("Prompt", style="magenta")
+        table.add_column("Description", style="white")
+        for name, meta in profiles.items():
+            table.add_row(
+                name,
+                str(meta.get("default_type", "")),
+                ", ".join(meta.get("source_types", [])),
+                str(meta.get("prompt_template", "")),
+                str(meta.get("description", "")),
+            )
+        console.print(table)
+        active_profile = profile or config.compile.profile
+        active_meta = profiles.get(active_profile, profiles["default"])
+        console.print(
+            f"[bold]Active profile:[/bold] {active_profile}\n"
+            f"[bold]Prompt template:[/bold] {prompt_template or config.compile.prompt_template or active_meta.get('prompt_template')}\n"
+            f"[bold]Output schema:[/bold] {output_schema or config.compile.output_schema or active_meta.get('output_schema')}"
+        )
+        return
 
     # --pending: show what needs incremental compilation.
     if pending:
@@ -151,7 +206,7 @@ def compile_cmd(
     elif article:
         # Compile a single article by ID.
         try:
-            result = compiler.compile_single(article)
+            result = compiler.compile_single(article, options=compile_options)
         except Exception as exc:
             console.print(f"[bold red]Compile error:[/bold red] {exc}")
             console.print(
@@ -187,7 +242,7 @@ def compile_cmd(
     elif all:
         # Compile all uncompiled.
         try:
-            results = compiler.compile_all(max_cost=max_cost)
+            results = compiler.compile_all(max_cost=max_cost, options=compile_options)
         except Exception as exc:
             console.print(f"[bold red]Compile error:[/bold red] {exc}")
             console.print(
@@ -211,7 +266,7 @@ def compile_cmd(
             )
             return
         try:
-            results = compiler.compile_all(max_cost=max_cost)
+            results = compiler.compile_all(max_cost=max_cost, options=compile_options)
         except Exception as exc:
             console.print(f"[bold red]Compile error:[/bold red] {exc}")
             console.print(

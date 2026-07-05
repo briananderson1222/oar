@@ -100,3 +100,45 @@ class TestCompileCLI:
         result = runner.invoke(app, ["compile"])
         assert result.exit_code == 0
         assert "No uncompiled" in result.output or "Nothing to do" in result.output
+
+    def test_compile_describe_shows_profiles(self, tmp_vault, monkeypatch):
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        result = runner.invoke(app, ["compile", "--describe"])
+        assert result.exit_code == 0
+        assert "Compile Profiles" in result.output
+        assert "Active profile:" in result.output
+
+    def test_compile_provider_flag_uses_requested_provider(self, tmp_vault, monkeypatch):
+        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
+        state_mgr = StateManager(tmp_vault / ".oar")
+        state_mgr.register_article(
+            "cli-test", "01-raw/articles/cli-test.md", "sha256:abc"
+        )
+        raw_path = tmp_vault / "01-raw" / "articles" / "cli-test.md"
+        raw_path.write_text(
+            "---\n"
+            "id: cli-test\n"
+            "title: CLI Test Article\n"
+            "source_type: article\n"
+            "compiled: false\n"
+            "---\n\n"
+            "Content for CLI test.\n"
+        )
+
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = _mock_provider_response(_make_llm_json())
+
+        with (
+            patch("oar.cli._shared.ProviderSelector") as MockSelector,
+            patch("oar.cli._shared.ProviderRegistry") as MockRegistry,
+        ):
+            mock_selector = MagicMock()
+            mock_selector.select_with_fallback.return_value = [mock_provider]
+            MockSelector.return_value = mock_selector
+            MockRegistry.return_value = MagicMock()
+            result = runner.invoke(
+                app, ["compile", "--article", "cli-test", "--provider", "claude-cli"]
+            )
+
+        assert result.exit_code == 0
+        MockSelector.assert_called()

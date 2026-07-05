@@ -6,6 +6,8 @@ from pathlib import Path
 
 import frontmatter
 
+from oar.core.models import VALID_COMPILED_TYPES, VALID_RAW_SOURCE_TYPES
+
 
 class FrontmatterManager:
     """Read and write YAML frontmatter on markdown files."""
@@ -35,7 +37,7 @@ class FrontmatterManager:
     # Validation
     # ------------------------------------------------------------------
 
-    VALID_RAW_TYPES = {"article", "paper", "repo", "file", "url"}
+    VALID_RAW_TYPES = set(VALID_RAW_SOURCE_TYPES)
 
     def validate_raw(self, metadata: dict) -> list[str]:
         """Validate raw article frontmatter.
@@ -50,6 +52,11 @@ class FrontmatterManager:
                 errors.append(f"Missing required field: {field}")
 
         # Type checks.
+        if "source_type" in metadata and metadata["source_type"] not in self.VALID_RAW_TYPES:
+            errors.append(
+                f"Invalid source_type '{metadata['source_type']}'; "
+                f"must be one of {sorted(self.VALID_RAW_TYPES)}"
+            )
         if "compiled" in metadata and not isinstance(metadata["compiled"], bool):
             errors.append("'compiled' must be a boolean")
         if "word_count" in metadata and not isinstance(metadata["word_count"], int):
@@ -57,14 +64,7 @@ class FrontmatterManager:
 
         return errors
 
-    VALID_COMPILED_TYPES = {
-        "concept",
-        "entity",
-        "method",
-        "comparison",
-        "tutorial",
-        "timeline",
-    }
+    VALID_COMPILED_TYPES = set(VALID_COMPILED_TYPES)
     VALID_STATUSES = {"stub", "draft", "mature", "review"}
 
     def validate_compiled(self, metadata: dict) -> list[str]:

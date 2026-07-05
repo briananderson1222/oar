@@ -83,7 +83,7 @@ class TestFrontmatterValidateRaw:
         meta = {
             "id": "test-1",
             "title": "Valid Article",
-            "source_type": "article",
+            "source_type": "transcript",
             "compiled": False,
             "word_count": 100,
         }
@@ -111,7 +111,7 @@ class TestFrontmatterValidateCompiled:
         meta = {
             "id": "concept-1",
             "title": "Valid Compiled",
-            "type": "concept",
+            "type": "summary",
             "status": "draft",
             "confidence": 0.8,
         }

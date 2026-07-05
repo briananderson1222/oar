@@ -10,7 +10,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from oar.cli._shared import find_vault_path, build_router
-from oar.compile.compiler import Compiler
+from oar.compile.compiler import CompileOptions, Compiler
+from oar.cli._shared import VALID_PROVIDERS
 from oar.core.hashing import content_hash
 from oar.core.slug import slugify
 from oar.core.state import StateManager
@@ -32,12 +33,20 @@ def build_cmd(
     model: Optional[str] = typer.Option(
         None, "--model", "-m", help="Override default LLM model."
     ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help=f"LLM provider to force for compile ({', '.join(sorted(VALID_PROVIDERS))}).",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be done without doing it."
     ),
     skip_lint: bool = typer.Option(False, "--skip-lint", help="Skip the lint step."),
     skip_compile: bool = typer.Option(
         False, "--skip-compile", help="Skip compilation (index + lint only)."
+    ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", help="Compile profile to use during the compile step."
     ),
 ) -> None:
     """Build the vault: compile raw → generate indices → lint check."""
@@ -112,9 +121,11 @@ def build_cmd(
             console.print("[dim]Skipped (--skip-compile).[/dim]")
     else:
         try:
-            router, cost_tracker, config = build_router(vault_path, model)
-            compiler = Compiler(vault, ops, router, state_mgr)
-            results = compiler.compile_all(max_cost=max_cost)
+            router, cost_tracker, config = build_router(vault_path, model, provider)
+            compiler = Compiler(vault, ops, router, state_mgr, config=config)
+            results = compiler.compile_all(
+                max_cost=max_cost, options=CompileOptions(profile=profile)
+            )
 
             if results:
                 table = Table(title="Compilation Results", show_header=True)

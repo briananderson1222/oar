@@ -22,24 +22,6 @@ def _resolve_vault_path() -> Path | None:
     return None
 
 
-def _build_components():
-    """Build vault components for tool execution."""
-    from oar.cli._shared import build_router
-    from oar.core.vault import Vault
-    from oar.core.vault_ops import VaultOps
-
-    vault_path = _resolve_vault_path()
-    if vault_path is None:
-        raise ValueError(
-            "No OAR vault found. Set OAR_VAULT or run from a vault directory."
-        )
-
-    vault = Vault(vault_path)
-    ops = VaultOps(vault)
-    router, cost_tracker, config = build_router(vault_path)
-    return vault, ops, router, cost_tracker, config
-
-
 def _build_vault_only():
     """Build vault components without LLM router. For retrieval-only tools."""
     from oar.core.vault import Vault
@@ -74,7 +56,7 @@ def tool_search_wiki(query: str, limit: int = 10) -> list[dict[str, Any]]:
     from oar.search.indexer import SearchIndexer
     from oar.search.searcher import Searcher
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
 
     # Ensure index exists.
     db_path = vault.oar_dir / "search-index" / "search.db"
@@ -111,7 +93,7 @@ def tool_read_article(article_id: str) -> dict[str, Any]:
     """
     from oar.core.frontmatter import FrontmatterManager
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     path = ops.get_article_by_id(article_id)
     if not path:
         return {"error": f"Article not found: {article_id}"}
@@ -141,7 +123,7 @@ def tool_list_articles(
     """
     from oar.core.frontmatter import FrontmatterManager
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     fm = FrontmatterManager()
 
     articles = []
@@ -211,78 +193,6 @@ def tool_get_wiki_context(
     }
 
 
-def tool_query_wiki(
-    question: str,
-    provider: str | None = None,
-    model: str | None = None,
-    max_cost: float = 0.50,
-) -> dict[str, Any]:
-    """Ask a question against the wiki knowledge base.
-
-    Retrieves context from the vault, then calls an LLM to answer.
-    Requires an LLM provider to be available.
-
-    Args:
-        question: Natural language question
-        provider: LLM provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli", "kiro-cli", "ollama", "litellm"). Uses config default if not specified.
-        model: Model name override (e.g. "claude-sonnet-4-20250514"). Uses config default if not specified.
-        max_cost: Maximum spend in USD for this query (default 0.50)
-
-    Returns:
-        Answer with sources consulted and citations
-    """
-    from oar.core.link_resolver import LinkResolver
-    from oar.index.moc_builder import MocBuilder
-    from oar.query.context_manager import ContextManager
-    from oar.query.engine import QueryEngine
-    from oar.query.tools import ToolExecutor
-    from oar.search.indexer import SearchIndexer
-    from oar.search.searcher import Searcher
-    from oar.cli._shared import build_router, VALID_PROVIDERS
-
-    vault_path = _resolve_vault_path()
-    if vault_path is None:
-        raise ValueError("No OAR vault found.")
-
-    # Validate provider if specified.
-    if provider is not None and provider not in VALID_PROVIDERS:
-        raise ValueError(
-            f"Invalid provider: '{provider}'. "
-            f"Valid providers: {sorted(VALID_PROVIDERS)}"
-        )
-
-    vault, ops = _build_vault_only()
-
-    # Build router with optional provider/model override.
-    router, cost_tracker, config = build_router(
-        vault_path, model=model, provider=provider
-    )
-
-    # Ensure search index.
-    db_path = vault.oar_dir / "search-index" / "search.db"
-    if not db_path.exists():
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        indexer = SearchIndexer(db_path)
-        indexer.index_vault(vault, ops)
-        indexer.close()
-
-    link_resolver = LinkResolver(vault, ops)
-    moc_builder = MocBuilder(vault, ops)
-    context_manager = ContextManager(vault, ops, link_resolver)
-    searcher = Searcher(db_path)
-    tool_executor = ToolExecutor(vault, ops, searcher, link_resolver, moc_builder)
-    engine = QueryEngine(context_manager, tool_executor, router)
-
-    result = engine.query(question)
-    return {
-        "answer": result.answer,
-        "sources_consulted": result.sources_consulted,
-        "tool_calls": result.tool_calls,
-        "tokens_used": result.tokens_used,
-        "cost_usd": result.cost_usd,
-    }
-
-
 def tool_get_status() -> dict[str, Any]:
     """Get vault statistics and status.
 
@@ -291,7 +201,7 @@ def tool_get_status() -> dict[str, Any]:
     """
     import json
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     state_file = vault.oar_dir / "state.json"
     state = json.loads(state_file.read_text()) if state_file.exists() else {}
     stats = state.get("stats", {})
@@ -314,7 +224,7 @@ def tool_list_mocs() -> list[dict[str, Any]]:
     """
     from oar.index.moc_builder import MocBuilder
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     moc_builder = MocBuilder(vault, ops)
     return moc_builder.list_mocs()
 
@@ -329,7 +239,7 @@ def tool_get_pending_articles() -> list[dict[str, Any]]:
     from oar.core.slug import slugify
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     state_mgr = StateManager(vault.oar_dir)
     state = state_mgr.load()
     articles_state = state.get("articles", {})
@@ -376,7 +286,7 @@ def tool_read_raw_article(article_id: str) -> dict[str, Any]:
 
     Returns the article's metadata and full body content.
     """
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     path = ops.get_article_by_id(article_id)
     if not path:
         return {"error": f"Raw article not found: {article_id}"}
@@ -428,7 +338,7 @@ def tool_save_compiled_article(
     from oar.core.slug import slugify
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
 
     # Generate ID and filename.
     article_id = slugify(title)
@@ -527,7 +437,7 @@ def tool_mark_raw_compiled(
     """
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
     state_mgr = StateManager(vault.oar_dir)
     state_mgr.mark_compiled(raw_article_id, [compiled_article_id])
 
@@ -548,7 +458,7 @@ def tool_build_indices() -> dict[str, Any]:
     from oar.index.orphan_tracker import OrphanTracker
     from oar.index.tag_builder import TagBuilder
 
-    vault, ops, *_ = _build_components()
+    vault, ops = _build_vault_only()
 
     # Build MOCs.
     moc_builder = MocBuilder(vault, ops)
@@ -645,33 +555,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             "required": ["question"],
         },
         "handler": tool_get_wiki_context,
-    },
-    "query_wiki": {
-        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, or litellm). Prefer get_wiki_context for agent-driven Q&A (no subprocess needed).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "Natural language question",
-                },
-                "provider": {
-                    "type": "string",
-                    "description": "LLM provider to use. Must be one of: claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, litellm. Uses config default if not specified.",
-                },
-                "model": {
-                    "type": "string",
-                    "description": "Model name override (e.g. claude-sonnet-4-20250514). Uses config default if not specified.",
-                },
-                "max_cost": {
-                    "type": "number",
-                    "description": "Maximum spend in USD for this query",
-                    "default": 0.50,
-                },
-            },
-            "required": ["question"],
-        },
-        "handler": tool_query_wiki,
     },
     "get_status": {
         "description": "Get vault statistics and status",

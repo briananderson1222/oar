@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -15,12 +16,22 @@ class CompileContextBuilder:
         self.vault = vault
         self.ops = ops
 
-    def build_single_context(self, raw_path: Path) -> str:
+    def build_single_context(
+        self,
+        raw_path: Path,
+        *,
+        strategy: str = "default",
+        max_chars: int = 32000,
+    ) -> str:
         """Build context for compiling a single raw article.
 
-        Returns the raw article body text.
+        Returns a context string appropriate for the selected strategy.
         """
         _, body = self.ops.read_article(raw_path)
+        if strategy == "transcript_excerpt":
+            return self._build_transcript_context(body, max_chars=max_chars)
+        if len(body) > max_chars:
+            return body[:max_chars] + "\n\n[TRUNCATED]"
         return body
 
     def build_multi_context(
@@ -110,3 +121,59 @@ class CompileContextBuilder:
             return None
         _, body = self.ops.read_article(path)
         return body
+
+    @staticmethod
+    def _normalize_transcript_line(line: str) -> str:
+        line = re.sub(r"<[^>]+>", "", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        return line
+
+    def _build_transcript_context(self, body: str, *, max_chars: int) -> str:
+        """Reduce a transcript into representative excerpts for compile."""
+        cleaned_lines: list[str] = []
+        prev = None
+        for raw_line in body.splitlines():
+            line = self._normalize_transcript_line(raw_line)
+            if not line:
+                continue
+            if re.fullmatch(r"Kind:\s+captions", line, re.IGNORECASE):
+                continue
+            if re.fullmatch(r"Language:\s+\w[\w-]*", line, re.IGNORECASE):
+                continue
+            if prev == line:
+                continue
+            prev = line
+            cleaned_lines.append(line)
+
+        if not cleaned_lines:
+            return body[:max_chars] + ("\n\n[TRUNCATED]" if len(body) > max_chars else "")
+
+        total_chars = sum(len(line) + 1 for line in cleaned_lines)
+        if total_chars <= max_chars:
+            return "\n".join(cleaned_lines)
+
+        segment_count = 5
+        window_size = max(20, len(cleaned_lines) // 20)
+        starts = []
+        if len(cleaned_lines) <= window_size * segment_count:
+            starts = list(range(0, len(cleaned_lines), window_size))
+        else:
+            max_start = max(0, len(cleaned_lines) - window_size)
+            starts = sorted(
+                {
+                    int(round(i * max_start / max(1, segment_count - 1)))
+                    for i in range(segment_count)
+                }
+            )
+
+        excerpts: list[str] = []
+        for idx, start in enumerate(starts, start=1):
+            chunk = cleaned_lines[start : start + window_size]
+            if not chunk:
+                continue
+            excerpts.append(f"## Excerpt {idx}\n" + "\n".join(chunk))
+
+        result = "\n\n".join(excerpts)
+        if len(result) > max_chars:
+            result = result[:max_chars] + "\n\n[TRUNCATED]"
+        return result
