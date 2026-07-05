@@ -11,8 +11,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from oar.cli._shared import find_vault_path
+from oar.cli._shared import emit_vault_banner, resolve_vault
 from oar.core.frontmatter import FrontmatterManager
+from oar.core.models import VALID_COMPILED_TYPES, compiled_subdir_for
 from oar.core.slug import slugify
 from oar.core.state import StateManager
 from oar.core.vault import Vault
@@ -20,7 +21,7 @@ from oar.core.vault_ops import VaultOps
 
 console = Console()
 
-VALID_TYPES = ("concept", "entity", "method", "comparison", "tutorial", "timeline")
+VALID_TYPES = VALID_COMPILED_TYPES
 
 
 def add_note_cmd(
@@ -50,14 +51,19 @@ def add_note_cmd(
     confidence: float = typer.Option(
         0.9, "--confidence", "-c", help="Confidence score 0.0-1.0."
     ),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Add a structured wiki note to the vault. No LLM — you write the content, this handles the structure."""
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     # Validate type.
     if type not in VALID_TYPES:
@@ -136,7 +142,7 @@ def add_note_cmd(
     # Write the article.
     vault = Vault(vault_path)
     ops = VaultOps(vault)
-    path = ops.write_compiled_article(type + "s", filename, metadata, note_body)
+    path = ops.write_compiled_article(compiled_subdir_for(type), filename, metadata, note_body)
 
     # Update state.
     state_mgr = StateManager(vault.oar_dir)

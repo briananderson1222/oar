@@ -6,54 +6,33 @@ from pathlib import Path
 from typing import Any
 
 
-def _resolve_vault_path() -> Path | None:
-    """Find the vault path using the same logic as CLI."""
-    import os
+def _resolve_vault_path(vault: str | None = None) -> Path | None:
+    """Resolve the vault path using the shared CLI resolver.
 
-    env_path = os.environ.get("OAR_VAULT")
-    if env_path:
-        p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
-    return None
+    Honors an explicit *vault* (registry name or path) with the same precedence
+    as the CLI: explicit > cwd > OAR_VAULT env > registry default.
+    """
+    from oar.cli._shared import resolve_vault
+
+    result = resolve_vault(vault)
+    return result[0] if result else None
 
 
-def _build_components():
-    """Build vault components for tool execution."""
-    from oar.cli._shared import build_router
-    from oar.core.vault import Vault
-    from oar.core.vault_ops import VaultOps
-
-    vault_path = _resolve_vault_path()
-    if vault_path is None:
-        raise ValueError(
-            "No OAR vault found. Set OAR_VAULT or run from a vault directory."
-        )
-
-    vault = Vault(vault_path)
-    ops = VaultOps(vault)
-    router, cost_tracker, config = build_router(vault_path)
-    return vault, ops, router, cost_tracker, config
-
-
-def _build_vault_only():
+def _build_vault_only(vault: str | None = None):
     """Build vault components without LLM router. For retrieval-only tools."""
     from oar.core.vault import Vault
     from oar.core.vault_ops import VaultOps
 
-    vault_path = _resolve_vault_path()
+    vault_path = _resolve_vault_path(vault)
     if vault_path is None:
         raise ValueError(
-            "No OAR vault found. Set OAR_VAULT or run from a vault directory."
+            "No OAR vault found. Pass `vault`, set OAR_VAULT, or run from a vault "
+            "directory."
         )
 
-    vault = Vault(vault_path)
-    ops = VaultOps(vault)
-    return vault, ops
+    vault_obj = Vault(vault_path)
+    ops = VaultOps(vault_obj)
+    return vault_obj, ops
 
 
 # ------------------------------------------------------------------
@@ -61,12 +40,15 @@ def _build_vault_only():
 # ------------------------------------------------------------------
 
 
-def tool_search_wiki(query: str, limit: int = 10) -> list[dict[str, Any]]:
+def tool_search_wiki(
+    query: str, limit: int = 10, vault: str | None = None
+) -> list[dict[str, Any]]:
     """Full-text search over wiki articles.
 
     Args:
         query: Search query string
         limit: Maximum results to return
+        vault: Optional vault name (registry) or path override
 
     Returns:
         List of search results with title, path, snippet, score
@@ -74,17 +56,18 @@ def tool_search_wiki(query: str, limit: int = 10) -> list[dict[str, Any]]:
     from oar.search.indexer import SearchIndexer
     from oar.search.searcher import Searcher
 
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
 
     # Ensure index exists.
-    db_path = vault.oar_dir / "search-index" / "search.db"
+    db_path = vault_obj.oar_dir / "search-index" / "search.db"
     if not db_path.exists():
         db_path.parent.mkdir(parents=True, exist_ok=True)
         indexer = SearchIndexer(db_path)
-        indexer.index_vault(vault, ops)
+        indexer.index_vault(vault_obj, ops)
         indexer.close()
 
-    searcher = Searcher(db_path)
+    # Pass vault/ops so the searcher stat-syncs the index before querying.
+    searcher = Searcher(db_path, vault=vault_obj, ops=ops)
     results = searcher.search(query, limit=limit)
 
     return [
@@ -100,18 +83,19 @@ def tool_search_wiki(query: str, limit: int = 10) -> list[dict[str, Any]]:
     ]
 
 
-def tool_read_article(article_id: str) -> dict[str, Any]:
+def tool_read_article(article_id: str, vault: str | None = None) -> dict[str, Any]:
     """Read a compiled wiki article by ID.
 
     Args:
         article_id: The article ID to read
+        vault: Optional vault name (registry) or path override
 
     Returns:
         Article metadata and body content
     """
     from oar.core.frontmatter import FrontmatterManager
 
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
     path = ops.get_article_by_id(article_id)
     if not path:
         return {"error": f"Article not found: {article_id}"}
@@ -129,19 +113,21 @@ def tool_read_article(article_id: str) -> dict[str, Any]:
 def tool_list_articles(
     category: str | None = None,
     tags: list[str] | None = None,
+    vault: str | None = None,
 ) -> list[dict[str, Any]]:
     """List compiled wiki articles, optionally filtered.
 
     Args:
         category: Filter by article type (concept, method, comparison, etc.)
         tags: Filter by tags (articles must have ALL specified tags)
+        vault: Optional vault name (registry) or path override
 
     Returns:
         List of article summaries
     """
     from oar.core.frontmatter import FrontmatterManager
 
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
     fm = FrontmatterManager()
 
     articles = []
@@ -176,6 +162,7 @@ def tool_list_articles(
 def tool_get_wiki_context(
     question: str,
     max_tokens: int = 50000,
+    vault: str | None = None,
 ) -> dict[str, Any]:
     """Get relevant wiki context for a question. No LLM call — pure retrieval.
 
@@ -187,6 +174,7 @@ def tool_get_wiki_context(
     Args:
         question: The question or topic to find context for
         max_tokens: Approximate token budget for returned context
+        vault: Optional vault name (registry) or path override
 
     Returns:
         Dict with context text, sources list, and token estimate
@@ -194,10 +182,10 @@ def tool_get_wiki_context(
     from oar.core.link_resolver import LinkResolver
     from oar.query.context_manager import ContextManager
 
-    vault, ops = _build_vault_only()
+    vault_obj, ops = _build_vault_only(vault)
 
-    link_resolver = LinkResolver(vault, ops)
-    context_manager = ContextManager(vault, ops, link_resolver)
+    link_resolver = LinkResolver(vault_obj, ops)
+    context_manager = ContextManager(vault_obj, ops, link_resolver)
 
     ctx = context_manager.build_context(question, max_tokens=max_tokens)
 
@@ -211,93 +199,24 @@ def tool_get_wiki_context(
     }
 
 
-def tool_query_wiki(
-    question: str,
-    provider: str | None = None,
-    model: str | None = None,
-    max_cost: float = 0.50,
-) -> dict[str, Any]:
-    """Ask a question against the wiki knowledge base.
-
-    Retrieves context from the vault, then calls an LLM to answer.
-    Requires an LLM provider to be available.
+def tool_get_status(vault: str | None = None) -> dict[str, Any]:
+    """Get vault statistics and status.
 
     Args:
-        question: Natural language question
-        provider: LLM provider to use (e.g. "claude-cli", "codex-cli", "opencode-cli", "kiro-cli", "ollama", "litellm"). Uses config default if not specified.
-        model: Model name override (e.g. "claude-sonnet-4-20250514"). Uses config default if not specified.
-        max_cost: Maximum spend in USD for this query (default 0.50)
-
-    Returns:
-        Answer with sources consulted and citations
-    """
-    from oar.core.link_resolver import LinkResolver
-    from oar.index.moc_builder import MocBuilder
-    from oar.query.context_manager import ContextManager
-    from oar.query.engine import QueryEngine
-    from oar.query.tools import ToolExecutor
-    from oar.search.indexer import SearchIndexer
-    from oar.search.searcher import Searcher
-    from oar.cli._shared import build_router, VALID_PROVIDERS
-
-    vault_path = _resolve_vault_path()
-    if vault_path is None:
-        raise ValueError("No OAR vault found.")
-
-    # Validate provider if specified.
-    if provider is not None and provider not in VALID_PROVIDERS:
-        raise ValueError(
-            f"Invalid provider: '{provider}'. "
-            f"Valid providers: {sorted(VALID_PROVIDERS)}"
-        )
-
-    vault, ops = _build_vault_only()
-
-    # Build router with optional provider/model override.
-    router, cost_tracker, config = build_router(
-        vault_path, model=model, provider=provider
-    )
-
-    # Ensure search index.
-    db_path = vault.oar_dir / "search-index" / "search.db"
-    if not db_path.exists():
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        indexer = SearchIndexer(db_path)
-        indexer.index_vault(vault, ops)
-        indexer.close()
-
-    link_resolver = LinkResolver(vault, ops)
-    moc_builder = MocBuilder(vault, ops)
-    context_manager = ContextManager(vault, ops, link_resolver)
-    searcher = Searcher(db_path)
-    tool_executor = ToolExecutor(vault, ops, searcher, link_resolver, moc_builder)
-    engine = QueryEngine(context_manager, tool_executor, router)
-
-    result = engine.query(question)
-    return {
-        "answer": result.answer,
-        "sources_consulted": result.sources_consulted,
-        "tool_calls": result.tool_calls,
-        "tokens_used": result.tokens_used,
-        "cost_usd": result.cost_usd,
-    }
-
-
-def tool_get_status() -> dict[str, Any]:
-    """Get vault statistics and status.
+        vault: Optional vault name (registry) or path override
 
     Returns:
         Vault statistics including article counts and last activity
     """
     import json
 
-    vault, ops, *_ = _build_components()
-    state_file = vault.oar_dir / "state.json"
+    vault_obj, ops = _build_vault_only(vault)
+    state_file = vault_obj.oar_dir / "state.json"
     state = json.loads(state_file.read_text()) if state_file.exists() else {}
     stats = state.get("stats", {})
 
     return {
-        "vault_path": str(vault.path),
+        "vault_path": str(vault_obj.path),
         "raw_articles": stats.get("raw_articles", 0),
         "compiled_articles": stats.get("compiled_articles", 0),
         "total_words": stats.get("total_words", 0),
@@ -306,21 +225,27 @@ def tool_get_status() -> dict[str, Any]:
     }
 
 
-def tool_list_mocs() -> list[dict[str, Any]]:
+def tool_list_mocs(vault: str | None = None) -> list[dict[str, Any]]:
     """List all Maps of Content (MOCs) in the wiki.
+
+    Args:
+        vault: Optional vault name (registry) or path override
 
     Returns:
         List of MOCs with their article counts
     """
     from oar.index.moc_builder import MocBuilder
 
-    vault, ops, *_ = _build_components()
-    moc_builder = MocBuilder(vault, ops)
+    vault_obj, ops = _build_vault_only(vault)
+    moc_builder = MocBuilder(vault_obj, ops)
     return moc_builder.list_mocs()
 
 
-def tool_get_pending_articles() -> list[dict[str, Any]]:
+def tool_get_pending_articles(vault: str | None = None) -> list[dict[str, Any]]:
     """Get raw articles that need compiling.
+
+    Args:
+        vault: Optional vault name (registry) or path override
 
     Returns list of pending articles with id, title, path, and status
     (NEW, UNCOMPILED, or UPDATED).
@@ -329,8 +254,8 @@ def tool_get_pending_articles() -> list[dict[str, Any]]:
     from oar.core.slug import slugify
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
-    state_mgr = StateManager(vault.oar_dir)
+    vault_obj, ops = _build_vault_only(vault)
+    state_mgr = StateManager(vault_obj.oar_dir)
     state = state_mgr.load()
     articles_state = state.get("articles", {})
 
@@ -371,12 +296,16 @@ def tool_get_pending_articles() -> list[dict[str, Any]]:
     return pending
 
 
-def tool_read_raw_article(article_id: str) -> dict[str, Any]:
+def tool_read_raw_article(article_id: str, vault: str | None = None) -> dict[str, Any]:
     """Read a raw (uncompiled) article by ID.
+
+    Args:
+        article_id: The raw article ID to read
+        vault: Optional vault name (registry) or path override
 
     Returns the article's metadata and full body content.
     """
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
     path = ops.get_article_by_id(article_id)
     if not path:
         return {"error": f"Raw article not found: {article_id}"}
@@ -401,6 +330,7 @@ def tool_save_compiled_article(
     source_ids: list[str] | None = None,
     status: str = "draft",
     confidence: float = 0.9,
+    vault: str | None = None,
 ) -> dict[str, Any]:
     """Save a compiled wiki article. Handles frontmatter, file placement, and state.
 
@@ -428,7 +358,7 @@ def tool_save_compiled_article(
     from oar.core.slug import slugify
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
 
     # Generate ID and filename.
     article_id = slugify(title)
@@ -488,10 +418,10 @@ def tool_save_compiled_article(
     path = ops.write_compiled_article(article_type + "s", filename, metadata, body)
 
     # Register in state.
-    state_mgr = StateManager(vault.oar_dir)
+    state_mgr = StateManager(vault_obj.oar_dir)
     state_mgr.register_article(
         article_id,
-        str(path.relative_to(vault.path)),
+        str(path.relative_to(vault_obj.path)),
         content_hash_string(body),
     )
 
@@ -518,17 +448,19 @@ def tool_save_compiled_article(
 def tool_mark_raw_compiled(
     raw_article_id: str,
     compiled_article_id: str,
+    vault: str | None = None,
 ) -> dict[str, Any]:
     """Mark a raw article as compiled, linked to its compiled output.
 
     Args:
         raw_article_id: The raw article ID to mark as compiled
         compiled_article_id: The compiled article ID it was compiled into
+        vault: Optional vault name (registry) or path override
     """
     from oar.core.state import StateManager
 
-    vault, ops, *_ = _build_components()
-    state_mgr = StateManager(vault.oar_dir)
+    vault_obj, ops = _build_vault_only(vault)
+    state_mgr = StateManager(vault_obj.oar_dir)
     state_mgr.mark_compiled(raw_article_id, [compiled_article_id])
 
     return {
@@ -538,29 +470,34 @@ def tool_mark_raw_compiled(
     }
 
 
-def tool_build_indices() -> dict[str, Any]:
+def tool_build_indices(vault: str | None = None) -> dict[str, Any]:
     """Rebuild all wiki indices: MOCs, tag pages, orphan/stub lists, master index.
 
     Run after adding or updating articles to keep cross-references current.
+    This is a true rebuild: stale auto-generated tag/MOC pages that are no longer
+    backed by an article are deleted.
+
+    Args:
+        vault: Optional vault name (registry) or path override
     """
     from oar.core.link_resolver import LinkResolver
     from oar.index.moc_builder import MocBuilder
     from oar.index.orphan_tracker import OrphanTracker
     from oar.index.tag_builder import TagBuilder
 
-    vault, ops, *_ = _build_components()
+    vault_obj, ops = _build_vault_only(vault)
 
-    # Build MOCs.
-    moc_builder = MocBuilder(vault, ops)
-    mocs = moc_builder.auto_generate_mocs()
+    # Build MOCs (prune stale auto-generated MOC pages).
+    moc_builder = MocBuilder(vault_obj, ops)
+    mocs = moc_builder.auto_generate_mocs(prune=True)
 
-    # Build tag pages.
-    tag_builder = TagBuilder(vault, ops)
-    tag_pages = tag_builder.auto_generate_tags()
+    # Build tag pages (prune stale auto-generated tag pages).
+    tag_builder = TagBuilder(vault_obj, ops)
+    tag_pages = tag_builder.auto_generate_tags(prune=True)
 
     # Build orphan and stub pages.
-    link_resolver = LinkResolver(vault, ops)
-    orphan_tracker = OrphanTracker(vault, ops, link_resolver)
+    link_resolver = LinkResolver(vault_obj, ops)
+    orphan_tracker = OrphanTracker(vault_obj, ops, link_resolver)
     orphans = orphan_tracker.write_orphans_page()
     stubs = orphan_tracker.write_stubs_page()
     orphan_tracker.write_recent_page()
@@ -645,33 +582,6 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             "required": ["question"],
         },
         "handler": tool_get_wiki_context,
-    },
-    "query_wiki": {
-        "description": "Ask a question — retrieves context then calls a subprocess LLM to answer. Requires an LLM provider (claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, or litellm). Prefer get_wiki_context for agent-driven Q&A (no subprocess needed).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "Natural language question",
-                },
-                "provider": {
-                    "type": "string",
-                    "description": "LLM provider to use. Must be one of: claude-cli, codex-cli, opencode-cli, kiro-cli, ollama, litellm. Uses config default if not specified.",
-                },
-                "model": {
-                    "type": "string",
-                    "description": "Model name override (e.g. claude-sonnet-4-20250514). Uses config default if not specified.",
-                },
-                "max_cost": {
-                    "type": "number",
-                    "description": "Maximum spend in USD for this query",
-                    "default": 0.50,
-                },
-            },
-            "required": ["question"],
-        },
-        "handler": tool_query_wiki,
     },
     "get_status": {
         "description": "Get vault statistics and status",
@@ -791,3 +701,19 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "handler": tool_build_indices,
     },
 }
+
+
+# Every tool accepts an optional `vault` override (registry name or path),
+# resolved with the same precedence as the CLI. Inject it into each schema so
+# definitions stay DRY and no tool can drift out of sync.
+_VAULT_PARAM_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Optional vault override: a registry name or a filesystem path. "
+        "Defaults to the auto-detected vault (cwd > OAR_VAULT > registry default)."
+    ),
+}
+
+for _defn in TOOL_DEFINITIONS.values():
+    _defn["parameters"].setdefault("properties", {})
+    _defn["parameters"]["properties"].setdefault("vault", dict(_VAULT_PARAM_SCHEMA))

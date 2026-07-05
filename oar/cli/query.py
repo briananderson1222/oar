@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from oar.cli._shared import find_vault_path, build_router
+from oar.cli._shared import build_router, resolve_vault
 from oar.core.link_resolver import LinkResolver
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -45,14 +45,18 @@ def query_cmd(
     stdout: bool = typer.Option(False, "--stdout", help="Print to stdout"),
     max_cost: float = typer.Option(2.00, "--max-cost", help="Max cost for this query"),
     interactive: bool = typer.Option(False, "--interactive", help="Interactive mode"),
+    vault: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Ask questions against the wiki knowledge base."""
-    vault_path = find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, _vault_source = resolved
 
     if question is None:
         console.print("[bold red]Error:[/bold red] Please provide a question.")
@@ -68,7 +72,8 @@ def query_cmd(
 
     # Ensure search index exists.
     db_path = _get_or_build_index(vault_path)
-    searcher = Searcher(db_path)
+    # Pass vault/ops so the searcher stat-syncs the index before querying.
+    searcher = Searcher(db_path, vault=vault, ops=ops)
 
     tool_executor = ToolExecutor(vault, ops, searcher, link_resolver, moc_builder)
     engine = QueryEngine(context_manager, tool_executor, router)

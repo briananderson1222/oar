@@ -37,5 +37,8 @@ oar-mcp = "oar.mcp_server:main"
 [tool.setuptools.packages.find]
 include = ["oar*"]
 
+[tool.setuptools.package-data]
+oar = ["compile/prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

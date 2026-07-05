@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 
 from jinja2 import Template
@@ -13,13 +14,16 @@ import re
 
 from oar.compile.concept_extractor import ConceptExtractor, ConceptSuggestion
 from oar.compile.context_builder import CompileContextBuilder
-from oar.compile.default_prompt import COMPILE_PROMPT
 from oar.compile.multi_prompt import MULTI_COMPILE_PROMPT
+from oar.compile.profiles import list_profiles
+from oar.core.config import OarConfig
 from oar.core.frontmatter import FrontmatterManager
+from oar.core.models import compiled_subdir_for
 from oar.core.slug import slugify
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
+from oar.llm.prompts import PromptLoader
 from oar.llm.router import LLMRouter
 
 
@@ -45,6 +49,16 @@ class MultiCompileResult:
     related_updates: list[str] = field(default_factory=list)
 
 
+@dataclass
+class CompileOptions:
+    """Runtime compile overrides from CLI or higher-level workflows."""
+
+    profile: str | None = None
+    prompt_template: str | None = None
+    output_schema: str | None = None
+    context_text: str | None = None
+
+
 class Compiler:
     """Orchestrate compilation of raw articles into structured wiki notes."""
 
@@ -54,15 +68,70 @@ class Compiler:
         ops: VaultOps,
         router: LLMRouter,
         state_manager: StateManager,
+        config: OarConfig | None = None,
     ) -> None:
         self.vault = vault
         self.ops = ops
         self.router = router
         self.state = state_manager
+        self.config = config or OarConfig.load(vault.oar_dir / "config.yaml")
         self.context_builder = CompileContextBuilder(vault, ops)
         self.concept_extractor = ConceptExtractor(router)
+        self.prompt_loader = PromptLoader(vault.oar_dir / "prompts")
 
-    def compile_article(self, raw_path: Path) -> CompileResult:
+    def _resolve_profile(self, source_type: str, options: CompileOptions | None) -> dict:
+        profiles = list_profiles(self.config)
+        selected = (
+            (options.profile if options else None)
+            or self.config.compile.source_type_profiles.get(source_type, self.config.compile.profile)
+        )
+        return profiles.get(selected, profiles["default"])
+
+    def _load_prompt_template(self, template_name: str) -> str:
+        vault_candidate = self.vault.oar_dir / "prompts" / template_name
+        if vault_candidate.exists():
+            return self.prompt_loader.load_raw(template_name)
+        return resources.files("oar.compile.prompts").joinpath(template_name).read_text()
+
+    def _build_prompt(
+        self,
+        title: str,
+        body: str,
+        source_type: str,
+        options: CompileOptions | None,
+    ) -> tuple[str, dict]:
+        profile = self._resolve_profile(source_type, options)
+        template_name = (
+            (options.prompt_template if options else None)
+            or self.config.compile.prompt_template
+            or profile["prompt_template"]
+        )
+        output_schema = (
+            (options.output_schema if options else None)
+            or self.config.compile.output_schema
+            or profile["output_schema"]
+        )
+        default_type = profile.get("default_type") or self.config.compile.default_type
+        template_text = self._load_prompt_template(template_name)
+        prompt_text = Template(template_text).render(
+            title=title,
+            content=body,
+            source_type=source_type,
+            default_type=default_type,
+            output_schema=output_schema,
+            extra_context=(options.context_text if options else "") or "",
+            profile_name=profile["name"],
+        )
+        return prompt_text, {
+            "profile_name": profile["name"],
+            "default_type": default_type,
+            "context_strategy": profile.get("context_strategy", "default"),
+            "max_context_chars": int(profile.get("max_context_chars", 32000)),
+        }
+
+    def compile_article(
+        self, raw_path: Path, options: CompileOptions | None = None
+    ) -> CompileResult:
         """Compile a single raw article into a wiki article.
 
         Steps:
@@ -90,10 +159,21 @@ class Compiler:
 
         raw_id: str = metadata.get("id", raw_path.stem)
         title: str = metadata.get("title", raw_path.stem)
+        source_type: str = metadata.get("source_type", "article")
+        profile = self._resolve_profile(source_type, options)
+        compile_context = self.context_builder.build_single_context(
+            raw_path,
+            strategy=profile.get("context_strategy", "default"),
+            max_chars=int(profile.get("max_context_chars", 32000)),
+        )
 
         # Build prompt.
-        prompt_template = Template(COMPILE_PROMPT)
-        prompt_text = prompt_template.render(title=title, content=body)
+        prompt_text, prompt_meta = self._build_prompt(
+            title,
+            compile_context,
+            source_type,
+            options,
+        )
         messages = [{"role": "user", "content": prompt_text}]
 
         # Call LLM.
@@ -141,16 +221,8 @@ class Compiler:
             )
 
         # Determine type → subdir mapping.
-        article_type = llm_frontmatter.get("type", "concept")
-        type_to_subdir: dict[str, str] = {
-            "concept": "concepts",
-            "entity": "entities",
-            "method": "methods",
-            "comparison": "comparisons",
-            "tutorial": "tutorials",
-            "timeline": "timelines",
-        }
-        subdir = type_to_subdir.get(article_type, "concepts")
+        article_type = llm_frontmatter.get("type", prompt_meta["default_type"])
+        subdir = compiled_subdir_for(article_type)
 
         # Build compiled article ID (slug from title).
         compiled_id = slugify(title)
@@ -198,7 +270,9 @@ class Compiler:
             success=True,
         )
 
-    def compile_single(self, article_id: str) -> CompileResult:
+    def compile_single(
+        self, article_id: str, options: CompileOptions | None = None
+    ) -> CompileResult:
         """Compile by article ID (looks up in state)."""
         raw_path = self.ops.get_article_by_id(article_id)
         if raw_path is None:
@@ -211,10 +285,13 @@ class Compiler:
                 success=False,
                 error=f"Article not found: {article_id}",
             )
-        return self.compile_article(raw_path)
+        return self.compile_article(raw_path, options=options)
 
     def compile_all(
-        self, limit: int = 10, max_cost: float = 5.00
+        self,
+        limit: int = 10,
+        max_cost: float = 5.00,
+        options: CompileOptions | None = None,
     ) -> list[CompileResult]:
         """Compile all uncompiled articles, respecting budget."""
         uncompiled = self.state.get_uncompiled()
@@ -223,7 +300,7 @@ class Compiler:
             # Check budget before each call.
             if not self.router.cost_tracker.check_budget(max_cost):
                 break
-            result = self.compile_single(article_id)
+            result = self.compile_single(article_id, options=options)
             results.append(result)
             if not result.success:
                 continue  # Still try next articles.

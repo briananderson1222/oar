@@ -139,13 +139,18 @@ class MocBuilder:
         self.fm.write(path, metadata, body)
         return path
 
-    def auto_generate_mocs(self) -> list[Path]:
+    def auto_generate_mocs(self, prune: bool = False) -> list[Path]:
         """Auto-detect topic clusters and generate MOCs.
 
         Strategy:
         1. Collect all compiled articles with their domain tags
         2. Group by domain
         3. Create one MOC per domain (if >= 2 articles)
+
+        When *prune* is True this is a true rebuild: any auto-generated
+        ``moc-*.md`` page not regenerated in this run (its domain no longer has
+        any article) is deleted. Only files matching the generated ``moc-*.md``
+        pattern are ever removed.
         """
         # Group articles by domain.
         domain_articles: dict[str, list[str]] = defaultdict(list)
@@ -169,7 +174,19 @@ class MocBuilder:
             title = domain.replace("-", " ").replace("_", " ").title()
             path = self.build_moc(title, domain, articles)
             created.append(path)
+        if prune:
+            self._prune_stale(created)
         return created
+
+    def _prune_stale(self, kept: list[Path]) -> None:
+        """Delete ``moc-*.md`` pages under 03-indices/moc/ not in *kept*."""
+        moc_dir = self.vault.indices_dir / "moc"
+        if not moc_dir.is_dir():
+            return
+        kept_names = {p.name for p in kept}
+        for page in moc_dir.glob("moc-*.md"):
+            if page.name not in kept_names:
+                page.unlink()
 
     def list_mocs(self) -> list[dict]:
         """List all existing MOCs with their metadata.

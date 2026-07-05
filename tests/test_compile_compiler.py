@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from oar.compile.compiler import Compiler, CompileResult
+from oar.compile.compiler import Compiler, CompileOptions, CompileResult
+from oar.core.config import OarConfig
 from oar.core.state import StateManager
 from oar.core.vault import Vault
 from oar.core.vault_ops import VaultOps
@@ -49,7 +50,13 @@ def _setup_compiler(tmp_vault: Path):
     tracker = CostTracker(tmp_vault / ".oar")
     state_mgr = StateManager(tmp_vault / ".oar")
     router = LLMRouter("claude-sonnet-4-20250514", tracker)
-    compiler = Compiler(vault, ops, router, state_mgr)
+    compiler = Compiler(
+        vault,
+        ops,
+        router,
+        state_mgr,
+        config=OarConfig.load(tmp_vault / ".oar" / "config.yaml"),
+    )
     return compiler, tracker, state_mgr, router
 
 
@@ -206,6 +213,88 @@ class TestCompileArticle:
         assert result.success is True
         assert tracker.get_session_cost() > 0
         assert result.cost_usd > 0
+
+    def test_compile_article_uses_transcript_profile_default_type(self, tmp_vault):
+        compiler, tracker, state_mgr, router = _setup_compiler(tmp_vault)
+
+        ops = VaultOps(Vault(tmp_vault))
+        raw_path = ops.write_raw_article(
+            "transcript-test.md",
+            {
+                "id": "transcript-test",
+                "title": "Transcript Test",
+                "source_type": "transcript",
+                "compiled": False,
+            },
+            "Speaker: Hello world.",
+        )
+        state_mgr.register_article(
+            "transcript-test", "01-raw/articles/transcript-test.md", "sha256:abc"
+        )
+
+        response = json.dumps(
+            {
+                "frontmatter": {
+                    "domain": ["research"],
+                    "tags": ["transcript"],
+                    "related": [],
+                    "complexity": "beginner",
+                    "confidence": 0.91,
+                },
+                "body": "# Transcript Summary\n\n## Summary\n\nA concise summary.\n",
+            }
+        )
+        with patch("litellm.completion") as mock_completion:
+            mock_completion.return_value = _mock_llm_response(response)
+            result = compiler.compile_article(raw_path)
+
+        assert result.success is True
+        meta, _ = compiler.ops.fm.read(result.compiled_path)
+        assert meta["type"] == "summary"
+        assert "summaries" in str(result.compiled_path)
+
+    def test_compile_article_uses_selected_profile_prompt(self, tmp_vault):
+        compiler, tracker, state_mgr, router = _setup_compiler(tmp_vault)
+
+        ops = VaultOps(Vault(tmp_vault))
+        raw_path = ops.write_raw_article(
+            "profile-test.md",
+            {
+                "id": "profile-test",
+                "title": "Profile Test",
+                "source_type": "article",
+                "compiled": False,
+            },
+            "This is source content.",
+        )
+        state_mgr.register_article(
+            "profile-test", "01-raw/articles/profile-test.md", "sha256:abc"
+        )
+
+        captured = {}
+
+        def _capture(*args, **kwargs):
+            captured["messages"] = kwargs["messages"]
+            return _mock_llm_response(
+                _make_llm_json(
+                    frontmatter={
+                        "type": "brief",
+                        "domain": [],
+                        "tags": [],
+                        "related": [],
+                        "complexity": "intermediate",
+                        "confidence": 0.8,
+                    }
+                )
+            )
+
+        with patch("litellm.completion", side_effect=_capture):
+            result = compiler.compile_article(
+                raw_path, options=CompileOptions(profile="repo-architecture")
+            )
+
+        assert result.success is True
+        assert "Key Components" in captured["messages"][0]["content"]
 
     def test_compile_article_handles_llm_error(self, tmp_vault):
         compiler, tracker, state_mgr, router = _setup_compiler(tmp_vault)

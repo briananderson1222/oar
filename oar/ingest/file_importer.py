@@ -20,17 +20,34 @@ class FileImporter:
 
     def import_file(self, source: Path, vault: Vault) -> Path:
         """Import a local file into the vault. Returns path to created raw article."""
+        return self.import_file_with_metadata(source, vault)
+
+    def import_file_with_metadata(
+        self,
+        source: Path,
+        vault: Vault,
+        *,
+        source_type: str | None = None,
+        title: str | None = None,
+        source_url: str = "",
+        author: str = "",
+        published: str = "",
+    ) -> Path:
+        """Import a local file with optional metadata overrides."""
         content = source.read_text()
-        source_type = self.detect_type(source)
+        resolved_source_type = source_type or self.detect_type(source)
 
         # Use filename (without extension) as a fallback title.
-        title = source.stem.replace("-", " ").replace("_", " ").strip()
-        if not title:
-            title = source.name
+        resolved_title = title or source.stem.replace("-", " ").replace("_", " ").strip()
+        if not resolved_title:
+            resolved_title = source.name
 
         metadata = generate_raw_metadata(
-            title=title,
-            source_type=source_type,
+            title=resolved_title,
+            source_url=source_url,
+            source_type=resolved_source_type,
+            author=author,
+            published=published,
             content=content,
         )
 

@@ -58,7 +58,8 @@ class CodexCliProvider(CliProvider):
                 recoverable=True,
             )
 
-        # Parse JSONL: look for item.completed events with agent_message text.
+        # Parse JSONL: use the LAST completed agent_message text, not the first.
+        last_text = None
         try:
             for line in stdout.strip().splitlines():
                 line = line.strip()
@@ -70,15 +71,18 @@ class CodexCliProvider(CliProvider):
                     if item.get("type") == "agent_message":
                         text = item.get("text", "")
                         if text:
-                            return LLMResponse(
-                                content=text,
-                                model=self.name,
-                                input_tokens=0,
-                                output_tokens=0,
-                                cost_usd=0.0,
-                            )
+                            last_text = text
         except (json.JSONDecodeError, AttributeError):
             pass
+
+        if last_text:
+            return LLMResponse(
+                content=last_text,
+                model=self.name,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+            )
 
         # Fallback: plain text.
         return LLMResponse(

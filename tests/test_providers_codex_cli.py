@@ -47,6 +47,20 @@ class TestCodexParseResponse:
         resp = p.parse_response(stdout=stdout, stderr="", returncode=0)
         assert "Transformers are neural networks." in resp.content
 
+    def test_codex_parse_uses_last_agent_message(self):
+        p = _make_provider()
+        first = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "startup"},
+        }
+        second = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "{\"frontmatter\":{},\"body\":\"ok\"}"},
+        }
+        stdout = "\n".join([json.dumps(first), json.dumps(second)])
+        resp = p.parse_response(stdout=stdout, stderr="", returncode=0)
+        assert resp.content == "{\"frontmatter\":{},\"body\":\"ok\"}"
+
     def test_codex_parse_error_returncode(self):
         p = _make_provider()
         try:

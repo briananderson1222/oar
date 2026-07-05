@@ -1,8 +1,38 @@
-"""Pydantic data models for OAR article metadata."""
+"""Pydantic data models and shared enums for OAR article metadata."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+
+VALID_RAW_SOURCE_TYPES = (
+    "article",
+    "paper",
+    "repo",
+    "file",
+    "url",
+    "transcript",
+    "video",
+    "meeting",
+)
+
+COMPILED_TYPE_TO_DIR = {
+    "concept": "concepts",
+    "entity": "entities",
+    "method": "methods",
+    "comparison": "comparisons",
+    "tutorial": "tutorials",
+    "timeline": "timelines",
+    "summary": "summaries",
+    "brief": "briefs",
+    "note": "notes",
+}
+
+VALID_COMPILED_TYPES = tuple(COMPILED_TYPE_TO_DIR.keys())
+
+
+def compiled_subdir_for(article_type: str) -> str:
+    """Return the compiled subdirectory for a compiled article type."""
+    return COMPILED_TYPE_TO_DIR.get(article_type, "concepts")
 
 
 class RawArticleMeta(BaseModel):
@@ -11,7 +41,7 @@ class RawArticleMeta(BaseModel):
     id: str
     title: str
     source_url: str = ""
-    source_type: str = "file"  # article | paper | repo | file | url
+    source_type: str = "file"
     author: str = ""
     published: str = ""
     clipped: str = ""

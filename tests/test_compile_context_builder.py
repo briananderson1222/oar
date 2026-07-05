@@ -29,6 +29,46 @@ class TestBuildSingleContext:
         result = builder.build_single_context(raw_path)
         assert "This is the body text of the article." in result
 
+    def test_build_single_context_transcript_strategy_strips_caption_markup(self, tmp_vault):
+        builder, ops = _setup_builder(tmp_vault)
+
+        raw_path = ops.write_raw_article(
+            "transcript.md",
+            {
+                "id": "transcript",
+                "title": "Transcript Context",
+                "source_type": "transcript",
+            },
+            "Kind: captions\nLanguage: en\nhello<00:00:01.000><c> world</c>\nhello world\n",
+        )
+
+        result = builder.build_single_context(
+            raw_path, strategy="transcript_excerpt", max_chars=500
+        )
+        assert "Kind: captions" not in result
+        assert "<00:00:01.000>" not in result
+        assert result.count("hello world") == 1
+
+    def test_build_single_context_transcript_strategy_reduces_long_transcript(self, tmp_vault):
+        builder, ops = _setup_builder(tmp_vault)
+
+        body = "\n".join(f"Line {i} about harness engineering." for i in range(400))
+        raw_path = ops.write_raw_article(
+            "long-transcript.md",
+            {
+                "id": "long-transcript",
+                "title": "Long Transcript",
+                "source_type": "transcript",
+            },
+            body,
+        )
+
+        result = builder.build_single_context(
+            raw_path, strategy="transcript_excerpt", max_chars=1000
+        )
+        assert "## Excerpt" in result
+        assert len(result) <= 1014
+
 
 class TestBuildMultiContext:
     """build_multi_context combines multiple articles."""

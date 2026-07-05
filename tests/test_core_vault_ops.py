@@ -171,3 +171,56 @@ class TestComputeHelpers:
     def test_compute_read_time_minimum(self):
         ops = VaultOps.__new__(VaultOps)
         assert ops.compute_read_time(0) == 1
+
+
+class TestGetArticleById:
+    """get_article_by_id — O(1) state fast path with scan fallback."""
+
+    def test_fast_path_from_state(self, tmp_vault):
+        from oar.core.state import StateManager
+
+        ops = VaultOps(Vault(tmp_vault))
+        path = ops.write_compiled_article(
+            "concepts",
+            "alpha.md",
+            {"id": "alpha", "title": "Alpha", "type": "concept", "status": "draft"},
+            "Body.",
+        )
+        rel = str(path.relative_to(tmp_vault))
+        StateManager((tmp_vault / ".oar")).register_article("alpha", rel, "hash")
+
+        found = ops.get_article_by_id("alpha")
+        assert found == path
+
+    def test_stale_state_falls_back_to_scan(self, tmp_vault):
+        from oar.core.state import StateManager
+
+        ops = VaultOps(Vault(tmp_vault))
+        # Register a path that does not exist on disk.
+        StateManager((tmp_vault / ".oar")).register_article(
+            "beta", "02-compiled/concepts/GONE.md", "hash"
+        )
+        # But the real file exists elsewhere with the matching id.
+        real = ops.write_compiled_article(
+            "concepts",
+            "beta-real.md",
+            {"id": "beta", "title": "Beta", "type": "concept", "status": "draft"},
+            "Body.",
+        )
+        found = ops.get_article_by_id("beta")
+        assert found == real
+
+    def test_unregistered_article_found_by_scan(self, tmp_vault):
+        ops = VaultOps(Vault(tmp_vault))
+        # Written directly, never registered in state.
+        path = ops.write_compiled_article(
+            "concepts",
+            "gamma.md",
+            {"id": "gamma", "title": "Gamma", "type": "concept", "status": "draft"},
+            "Body.",
+        )
+        assert ops.get_article_by_id("gamma") == path
+
+    def test_missing_article_returns_none(self, tmp_vault):
+        ops = VaultOps(Vault(tmp_vault))
+        assert ops.get_article_by_id("nope") is None

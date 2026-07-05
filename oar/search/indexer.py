@@ -21,6 +21,8 @@ class SearchDocument:
     body: str
     tags: str = ""  # space-separated
     aliases: str = ""  # space-separated
+    mtime: float | None = None  # source file mtime (for staleness sync)
+    size: int | None = None  # source file size in bytes (for staleness sync)
 
 
 class SearchIndexer:
@@ -46,7 +48,9 @@ class SearchIndexer:
                 backlink_count INTEGER DEFAULT 0,
                 created TEXT,
                 updated TEXT,
-                content_hash TEXT
+                content_hash TEXT,
+                mtime REAL,
+                size INTEGER
             );
 
             CREATE VIRTUAL TABLE IF NOT EXISTS vault_fts USING fts5(
@@ -67,6 +71,14 @@ class SearchIndexer:
             CREATE INDEX IF NOT EXISTS idx_vault_docs_type ON vault_docs(type);
             CREATE INDEX IF NOT EXISTS idx_vault_docs_article_id ON vault_docs(article_id);
         """)
+        # Migration: add mtime/size columns to pre-existing databases.
+        existing_cols = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(vault_docs)")
+        }
+        if "mtime" not in existing_cols:
+            self.conn.execute("ALTER TABLE vault_docs ADD COLUMN mtime REAL")
+        if "size" not in existing_cols:
+            self.conn.execute("ALTER TABLE vault_docs ADD COLUMN size INTEGER")
         self.conn.commit()
 
     def index_article(self, doc: SearchDocument, metadata: dict | None = None) -> None:
@@ -98,8 +110,8 @@ class SearchIndexer:
         self.conn.execute(
             """INSERT INTO vault_docs
                (article_id, path, title, type, status, word_count, backlink_count,
-                created, updated, content_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created, updated, content_hash, mtime, size)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 doc.article_id,
                 doc.path,
@@ -111,6 +123,8 @@ class SearchIndexer:
                 meta.get("created"),
                 meta.get("updated"),
                 meta.get("content_hash"),
+                doc.mtime,
+                doc.size,
             ),
         )
 
@@ -142,37 +156,111 @@ class SearchIndexer:
         count = 0
         for path in ops.list_compiled_articles():
             meta, body = ops.read_article(path)
-
-            article_id = meta.get("id", path.stem)
-            title = meta.get("title", path.stem)
-            article_type = meta.get("type", "concept")
-            tags_list = meta.get("tags", [])
-            aliases_list = meta.get("aliases", [])
-
-            # Compute vault-relative path.
-            try:
-                rel_path = str(path.relative_to(vault.path))
-            except ValueError:
-                rel_path = str(path)
-
-            doc = SearchDocument(
-                article_id=article_id,
-                title=title,
-                path=rel_path,
-                type=article_type,
-                body=body,
-                tags=" ".join(tags_list)
-                if isinstance(tags_list, list)
-                else str(tags_list),
-                aliases=" ".join(aliases_list)
-                if isinstance(aliases_list, list)
-                else str(aliases_list),
-            )
-
+            doc = self._build_doc(vault, path, meta, body)
             self.index_article(doc, metadata=meta)
             count += 1
 
         return count
+
+    @staticmethod
+    def _build_doc(vault: Vault, path: Path, meta: dict, body: str) -> SearchDocument:
+        """Build a :class:`SearchDocument` from a vault article path + metadata."""
+        article_id = meta.get("id", path.stem)
+        title = meta.get("title", path.stem)
+        article_type = meta.get("type", "concept")
+        tags_list = meta.get("tags", [])
+        aliases_list = meta.get("aliases", [])
+
+        try:
+            rel_path = str(path.relative_to(vault.path))
+        except ValueError:
+            rel_path = str(path)
+
+        try:
+            st = path.stat()
+            mtime: float | None = st.st_mtime
+            size: int | None = st.st_size
+        except OSError:
+            mtime = None
+            size = None
+
+        return SearchDocument(
+            article_id=article_id,
+            title=title,
+            path=rel_path,
+            type=article_type,
+            body=body,
+            tags=" ".join(tags_list)
+            if isinstance(tags_list, list)
+            else str(tags_list),
+            aliases=" ".join(aliases_list)
+            if isinstance(aliases_list, list)
+            else str(aliases_list),
+            mtime=mtime,
+            size=size,
+        )
+
+    def sync(self, vault: Vault, ops: VaultOps) -> dict[str, int]:
+        """Incrementally reconcile the index with the vault via stat comparison.
+
+        Compares each compiled article's ``(mtime, size)`` against the stored
+        values. Unchanged docs are skipped without reading the file; new and
+        changed docs are (re)indexed; docs whose backing file has disappeared are
+        removed. Cheap enough to run before every query at hundreds of docs.
+
+        Returns a dict of counts: ``added``, ``updated``, ``removed``,
+        ``unchanged``.
+        """
+        rows = self.conn.execute(
+            "SELECT article_id, path, mtime, size FROM vault_docs"
+        ).fetchall()
+        by_path = {row["path"]: row for row in rows}
+
+        seen_paths: set[str] = set()
+        added = updated = unchanged = 0
+
+        for path in ops.list_compiled_articles():
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            try:
+                rel_path = str(path.relative_to(vault.path))
+            except ValueError:
+                rel_path = str(path)
+            seen_paths.add(rel_path)
+
+            existing = by_path.get(rel_path)
+            if (
+                existing is not None
+                and existing["mtime"] == st.st_mtime
+                and existing["size"] == st.st_size
+            ):
+                unchanged += 1
+                continue
+
+            # New or changed → read + (re)index (upsert keyed by article_id).
+            meta, body = ops.read_article(path)
+            doc = self._build_doc(vault, path, meta, body)
+            self.index_article(doc, metadata=meta)
+            if existing is None:
+                added += 1
+            else:
+                updated += 1
+
+        # Deletions: index rows whose backing file is gone.
+        removed = 0
+        for rel_path, row in by_path.items():
+            if rel_path not in seen_paths:
+                self.remove_article(row["article_id"])
+                removed += 1
+
+        return {
+            "added": added,
+            "updated": updated,
+            "removed": removed,
+            "unchanged": unchanged,
+        }
 
     def remove_article(self, article_id: str) -> None:
         """Remove an article from the index."""

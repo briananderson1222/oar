@@ -15,7 +15,6 @@ from oar.mcp_tools import (
     tool_list_articles,
     tool_list_mocs,
     tool_mark_raw_compiled,
-    tool_query_wiki,
     tool_read_article,
     tool_read_raw_article,
     tool_save_compiled_article,
@@ -79,11 +78,10 @@ class TestMCPToolDefinitions:
             assert "properties" in schema, f"{name} missing properties"
 
     def test_expected_tools_registered(self):
-        """All 12 expected tools are registered."""
+        """All expected retrieval/write MCP tools are registered."""
         expected = {
             "search_wiki",
             "read_article",
-            "query_wiki",
             "get_status",
             "list_mocs",
             "list_articles",
@@ -571,20 +569,6 @@ class TestBuildRouterProviderValidation:
         with pytest.raises(ValueError, match="Invalid provider.*gpt-4"):
             build_router(tmp_vault, provider="gpt-4")
 
-    def test_query_wiki_invalid_provider_raises(self, tmp_vault, monkeypatch):
-        """query_wiki rejects invalid provider name."""
-        monkeypatch.setenv("OAR_VAULT", str(tmp_vault))
-        with pytest.raises(ValueError, match="Invalid provider.*fake-llm"):
-            tool_query_wiki(question="test", provider="fake-llm")
-
-    def test_query_wiki_schema_has_provider_param(self):
-        """query_wiki MCP schema includes provider and model params."""
-        schema = TOOL_DEFINITIONS["query_wiki"]["parameters"]
-        props = schema["properties"]
-        assert "provider" in props
-        assert "model" in props
-        assert "max_cost" in props
-
 
 class TestMCPServerCreation:
     """Test that the MCP server can be created."""
@@ -609,3 +593,37 @@ class TestMCPServerCreation:
             assert hasattr(server, "call_tool")
         except ImportError:
             pytest.skip("mcp package not installed")
+
+
+class TestMCPVaultParam:
+    """Every MCP tool accepts an optional `vault` override, same precedence as CLI."""
+
+    def test_every_tool_schema_exposes_vault(self):
+        for name, defn in TOOL_DEFINITIONS.items():
+            props = defn["parameters"]["properties"]
+            assert "vault" in props, f"{name} schema missing vault param"
+            assert props["vault"]["type"] == "string"
+
+    def test_explicit_vault_path_selects_vault(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OAR_VAULT", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        a = Vault(tmp_path / "A")
+        a.init()
+        monkeypatch.chdir(tmp_path)  # cwd is not itself a vault
+        result = tool_get_status(vault=str(a.path))
+        assert result["vault_path"] == str(a.path.resolve())
+
+    def test_incident_env_never_overrides_cwd(self, tmp_path, monkeypatch):
+        """OAR_VAULT=A, cwd inside B → tools resolve B; explicit --vault beats both."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        a = Vault(tmp_path / "A")
+        a.init()
+        b = Vault(tmp_path / "B")
+        b.init()
+        monkeypatch.setenv("OAR_VAULT", str(a.path))
+        monkeypatch.chdir(b.path)
+
+        # No explicit vault → cwd (B) wins over OAR_VAULT env (A).
+        assert tool_get_status()["vault_path"] == str(b.path.resolve())
+        # Explicit path to A overrides everything.
+        assert tool_get_status(vault=str(a.path))["vault_path"] == str(a.path.resolve())

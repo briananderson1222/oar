@@ -271,3 +271,56 @@ class TestRemoveArticle:
         assert len(tag_rows) == 0
 
         indexer.close()
+
+
+class TestSync:
+    """Incremental stat-based sync (oar#3 search staleness)."""
+
+    def test_sync_add_modify_delete(self, indexed_vault):
+        tmp_vault, db_path, _count = indexed_vault
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        indexer = SearchIndexer(db_path)
+
+        # Add a new article.
+        ops.write_compiled_article(
+            "concepts",
+            "new-doc.md",
+            {
+                "id": "new-doc",
+                "title": "New Doc",
+                "type": "concept",
+                "status": "draft",
+                "tags": ["diffusion"],
+            },
+            "Brand new content about diffusion models.",
+        )
+        # Modify an existing article (append → changes size).
+        existing = tmp_vault / "02-compiled" / "concepts" / "attention-mechanism.md"
+        existing.write_text(existing.read_text() + "\n\nAppended paragraph.\n")
+        # Delete an article.
+        (tmp_vault / "02-compiled" / "methods" / "fine-tuning.md").unlink()
+
+        stats = indexer.sync(vault, ops)
+        assert stats["added"] == 1
+        assert stats["updated"] == 1
+        assert stats["removed"] == 1
+        assert stats["unchanged"] >= 1
+
+        ids = {
+            r["article_id"]
+            for r in indexer.conn.execute("SELECT article_id FROM vault_docs")
+        }
+        assert "new-doc" in ids
+        assert "fine-tuning" not in ids
+        assert "attention-mechanism" in ids
+        indexer.close()
+
+    def test_sync_noop_when_unchanged(self, indexed_vault):
+        tmp_vault, db_path, _count = indexed_vault
+        vault = Vault(tmp_vault)
+        ops = VaultOps(vault)
+        indexer = SearchIndexer(db_path)
+        stats = indexer.sync(vault, ops)
+        assert stats == {"added": 0, "updated": 0, "removed": 0, "unchanged": 3}
+        indexer.close()

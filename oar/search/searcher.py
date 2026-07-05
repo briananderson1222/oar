@@ -5,6 +5,11 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from oar.core.vault import Vault
+    from oar.core.vault_ops import VaultOps
 
 
 @dataclass
@@ -18,13 +23,38 @@ class SearchResult:
     snippet: str  # First 200 chars of body with query terms highlighted
     path: str
     tags: list[str] = field(default_factory=list)
+    backlink_count: int = 0
 
 
 class Searcher:
-    """Full-text search over the vault using SQLite FTS5."""
+    """Full-text search over the vault using SQLite FTS5.
 
-    def __init__(self, db_path: Path) -> None:
+    Ranking formula (deterministic):
+
+        final_score = bm25_relevance
+                      * backlink_boost
+                      * title_boost
+
+    where ``bm25_relevance = -bm25(vault_fts)`` (higher is better),
+    ``backlink_boost = 1 + min(backlink_count, 10) * 0.02`` (well-connected
+    notes get up to a +20% nudge), and ``title_boost`` comes from
+    :func:`oar.search.ranker.rank_results` — 1.5x when every query word appears
+    in the title, otherwise ``1 + 0.2 * (query∩title word overlap)``.
+
+    When constructed with *vault* and *ops*, :meth:`search` first calls
+    :meth:`oar.search.indexer.SearchIndexer.sync` to reconcile the index with
+    the vault (cheap stat-compare) so results never go stale between rebuilds.
+    """
+
+    def __init__(
+        self,
+        db_path: Path,
+        vault: "Vault | None" = None,
+        ops: "VaultOps | None" = None,
+    ) -> None:
         self.db_path = db_path
+        self._vault = vault
+        self._ops = ops
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
 
@@ -35,8 +65,13 @@ class Searcher:
         type_filter: str | None = None,
         domain_filter: str | None = None,
     ) -> list[SearchResult]:
-        """Search the vault. Returns ranked results."""
+        """Search the vault. Returns results ranked by the formula documented on
+        the class: BM25 relevance, scaled by a backlink boost and a title boost.
+        """
         import re
+
+        # Reconcile the index with the vault (add/modify/delete) before querying.
+        self._maybe_sync()
 
         # Build a safe FTS5 MATCH query.
         # Strategy: split query into tokens. Hyphenated words become phrase
@@ -67,6 +102,7 @@ class Searcher:
                     fts.body,
                     docs.type,
                     docs.path,
+                    docs.backlink_count,
                     -bm25(vault_fts) AS score
                 FROM vault_fts fts
                 JOIN vault_docs docs ON docs.article_id = fts.article_id
@@ -84,6 +120,7 @@ class Searcher:
                     fts.body,
                     docs.type,
                     docs.path,
+                    docs.backlink_count,
                     -bm25(vault_fts) AS score
                 FROM vault_fts fts
                 JOIN vault_docs docs ON docs.article_id = fts.article_id
@@ -106,19 +143,39 @@ class Searcher:
             ).fetchall()
             tags = [tr["tag"] for tr in tag_rows]
 
+            backlink_count = row["backlink_count"] or 0
+            # Backlink boost: well-connected notes get up to +20%.
+            score = row["score"] * (1 + min(backlink_count, 10) * 0.02)
+
             results.append(
                 SearchResult(
                     article_id=row["article_id"],
                     title=row["title"],
                     type=row["type"] or "",
-                    score=row["score"],
+                    score=score,
                     snippet=snippet,
                     path=row["path"] or "",
                     tags=tags,
+                    backlink_count=backlink_count,
                 )
             )
 
-        return results
+        # Title-boost re-rank on top of BM25 + backlink ordering.
+        from oar.search.ranker import rank_results
+
+        return rank_results(results, query)
+
+    def _maybe_sync(self) -> None:
+        """Stat-sync the index with the vault when vault/ops were provided."""
+        if self._vault is None or self._ops is None:
+            return
+        from oar.search.indexer import SearchIndexer
+
+        indexer = SearchIndexer(self.db_path)
+        try:
+            indexer.sync(self._vault, self._ops)
+        finally:
+            indexer.close()
 
     def get_article(self, article_id: str) -> dict | None:
         """Get full article metadata by ID."""

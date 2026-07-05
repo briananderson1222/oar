@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BudgetConfigModel(BaseModel):
@@ -36,6 +36,20 @@ class CompileConfig(BaseModel):
 
     default_type: str = "concept"
     auto_index: bool = True
+    profile: str = "default"
+    prompt_template: str | None = None
+    output_schema: str | None = None
+    source_type_profiles: dict[str, str] = Field(
+        default_factory=lambda: {
+            "article": "default",
+            "paper": "paper-summary",
+            "repo": "repo-architecture",
+            "transcript": "transcript-summary",
+            "video": "transcript-summary",
+            "meeting": "meeting-brief",
+        }
+    )
+    profiles: dict[str, dict] = Field(default_factory=dict)
 
 
 class OarConfig(BaseModel):

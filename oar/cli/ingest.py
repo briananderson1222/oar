@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from oar.cli._shared import emit_vault_banner, resolve_vault
 from oar.core.frontmatter import FrontmatterManager
 from oar.core.hashing import content_hash_string
 from oar.core.state import StateManager
@@ -21,41 +21,47 @@ from oar.ingest.metadata import generate_raw_metadata
 console = Console()
 
 
-def _find_vault_path() -> Optional[Path]:
-    """Resolve vault path — prefer OAR_VAULT env var, else walk up from cwd."""
-    env_path = os.environ.get("OAR_VAULT")
-    if env_path:
-        p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
-
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
-    return None
-
-
 def ingest(
     url: Optional[str] = typer.Option(None, "--url", help="URL to fetch"),
     file: Optional[Path] = typer.Option(None, "--file", help="Local file to import"),
     dir: Optional[Path] = typer.Option(None, "--dir", help="Directory to batch import"),
-    type: str = typer.Option("article", "--type", help="article|paper|repo"),
+    type: str = typer.Option(
+        "article",
+        "--type",
+        help="Raw source type: article|paper|repo|transcript|meeting|video|file|url",
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title", help="Optional title override for file-based ingest."
+    ),
+    source_url: Optional[str] = typer.Option(
+        None, "--source-url", help="Optional source URL to record for file-based ingest."
+    ),
+    author: Optional[str] = typer.Option(
+        None, "--author", help="Optional author/source speaker metadata."
+    ),
+    published: Optional[str] = typer.Option(
+        None, "--published", help="Optional published date metadata."
+    ),
+    vault_opt: Optional[str] = typer.Option(
+        None, "--vault", help="Vault name (from registry) or path. Overrides auto-detection."
+    ),
 ) -> None:
     """Import documents into the vault's raw directory."""
-    vault_path = _find_vault_path()
-    if vault_path is None:
+    resolved = resolve_vault(vault_opt)
+    if resolved is None:
         console.print(
             "[bold red]Error:[/bold red] No OAR vault found. Run `oar init` first."
         )
         raise typer.Exit(code=1)
+    vault_path, vault_source = resolved
+    emit_vault_banner(console, vault_path, vault_source)
 
     vault = Vault(vault_path)
 
     if url:
         _handle_url(vault, url, type)
     elif file:
-        _handle_file(vault, file)
+        _handle_file(vault, file, type, title, source_url, author, published)
     elif dir:
         _handle_directory(vault, dir)
     else:
@@ -105,14 +111,30 @@ def _handle_url(vault: Vault, url: str, source_type: str) -> None:
     )
 
 
-def _handle_file(vault: Vault, file: Path) -> None:
+def _handle_file(
+    vault: Vault,
+    file: Path,
+    source_type: str,
+    title: Optional[str],
+    source_url: Optional[str],
+    author: Optional[str],
+    published: Optional[str],
+) -> None:
     """Import a local file into the vault."""
     if not file.exists():
         console.print(f"[bold red]Error:[/bold red] File not found: {file}")
         raise typer.Exit(code=1)
 
     importer = FileImporter()
-    dest = importer.import_file(file, vault)
+    dest = importer.import_file_with_metadata(
+        file,
+        vault,
+        source_type=source_type,
+        title=title,
+        source_url=source_url or "",
+        author=author or "",
+        published=published or "",
+    )
 
     console.print(
         Panel(

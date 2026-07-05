@@ -17,19 +17,85 @@ from oar.llm.router import LLMRouter
 VALID_PROVIDERS = frozenset(PROVIDER_CLASSES.keys())
 
 
-def find_vault_path() -> Optional[Path]:
-    """Resolve vault path — prefer OAR_VAULT env var, else walk up from cwd."""
+def _is_vault(path: Path) -> bool:
+    """A directory is a valid vault iff it contains ``.oar/state.json``."""
+    return (path / ".oar" / "state.json").exists()
+
+
+def resolve_vault(explicit: str | None) -> Optional[tuple[Path, str]]:
+    """Resolve the active vault and report how it was found.
+
+    Precedence (highest first)::
+
+        1. explicit   (``--vault``: a registry name OR a filesystem path)
+        2. cwd        (walk up from the current directory)
+        3. OAR_VAULT  (environment variable)
+        4. registry   (the registry default vault)
+
+    A directory is a valid vault when ``.oar/state.json`` exists. This ordering
+    deliberately places *cwd* above *OAR_VAULT* so that a globally-exported
+    ``OAR_VAULT`` can never silently override the vault you are standing in.
+
+    Returns ``(vault_path, source)`` where ``source`` is one of
+    ``"registry:<name>"``, ``"explicit path"``, ``"cwd"``, ``"OAR_VAULT env"``,
+    or ``"registry default"``. Returns ``None`` when no valid vault is found (or
+    when an explicit value was given but did not resolve to a valid vault).
+    """
+    from oar.core import vault_registry
+
+    # 1. Explicit --vault: registry name wins over a same-named path.
+    if explicit:
+        reg_path = vault_registry.resolve_name(explicit)
+        if reg_path is not None and _is_vault(reg_path):
+            return (reg_path.resolve(), f"registry:{explicit}")
+        p = Path(explicit).expanduser()
+        if _is_vault(p):
+            return (p.resolve(), "explicit path")
+        return None
+
+    # 2. cwd walk-up.
+    current = Path.cwd()
+    for parent in [current, *current.parents]:
+        if _is_vault(parent):
+            return (parent.resolve(), "cwd")
+
+    # 3. OAR_VAULT environment variable.
     env_path = os.environ.get("OAR_VAULT")
     if env_path:
         p = Path(env_path)
-        if (p / ".oar" / "state.json").exists():
-            return p
+        if _is_vault(p):
+            return (p.resolve(), "OAR_VAULT env")
 
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".oar" / "state.json").exists():
-            return parent
+    # 4. Registry default.
+    default = vault_registry.default_name()
+    if default:
+        reg_path = vault_registry.resolve_name(default)
+        if reg_path is not None and _is_vault(reg_path):
+            return (reg_path.resolve(), "registry default")
+
     return None
+
+
+def find_vault_path(explicit: str | None = None) -> Optional[Path]:
+    """Back-compat thin wrapper around :func:`resolve_vault`.
+
+    Returns just the resolved vault path (or ``None``). New code should prefer
+    :func:`resolve_vault` to also learn the resolution *source*.
+    """
+    result = resolve_vault(explicit)
+    return result[0] if result else None
+
+
+def emit_vault_banner(console, vault_path: Path, source: str) -> None:
+    """Print the one-line resolved-vault banner before a mutating action.
+
+    Uses ``soft_wrap`` so long absolute paths are never split across lines.
+    """
+    console.print(
+        f"vault: {vault_path} (via {source})",
+        highlight=False,
+        soft_wrap=True,
+    )
 
 
 def build_router(

@@ -101,3 +101,40 @@ class TestIngestFileCLI:
         assert len(md_files) >= 1
         content = md_files[0].read_text()
         assert "Mocked Article" in content or "mocked" in content.lower()
+
+    def test_ingest_file_with_metadata_overrides(self, tmp_vault):
+        source = tmp_vault / "transcript.txt"
+        source.write_text("Speaker: Hello world.")
+
+        result = runner.invoke(
+            app,
+            [
+                "ingest",
+                "--file",
+                str(source),
+                "--type",
+                "transcript",
+                "--title",
+                "My Transcript",
+                "--source-url",
+                "https://www.youtube.com/watch?v=example",
+                "--author",
+                "Example Speaker",
+                "--published",
+                "2026-04-18",
+            ],
+            env={"OAR_VAULT": str(tmp_vault)},
+        )
+        assert result.exit_code == 0
+
+        articles_dir = tmp_vault / "01-raw" / "articles"
+        md_files = [
+            f
+            for f in articles_dir.iterdir()
+            if f.suffix == ".md" and f.name != "_index.md"
+        ]
+        assert len(md_files) >= 1
+        content = md_files[0].read_text()
+        assert "title: My Transcript" in content
+        assert "source_type: transcript" in content
+        assert "source_url: https://www.youtube.com/watch?v=example" in content
